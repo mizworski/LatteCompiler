@@ -19,6 +19,7 @@
 # resolver: ./custom-snapshot.yaml
 # resolver: https://example.com/snapshots/2018-01-01.yaml
 resolver: lts-12.21
+compiler: ghc-8.2.2
 
 # User packages to be built.
 # Various formats can be used as shown in the example below.
@@ -35,10 +36,17 @@ resolver: lts-12.21
 #  - wai
 packages:
 - .
+- location:
+    git: https://github.com/mlazowik/bnfc
+    commit: d330b1625caa5ead03e1ceecb905a3648574398c
+  subdirs:
+  - source
+  extra-dep: true
 # Dependency packages to be pulled from upstream that are not in the resolver
 # using the same syntax as the packages field.
 # (e.g., acme-missiles-0.3)
-# extra-deps: []
+extra-deps:
+- transformers-0.5.5.0
 
 # Override default flag values for local packages and extra-deps
 # flags: {}
