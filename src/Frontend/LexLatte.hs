@@ -126,12 +126,14 @@ data Token =
  | Err Posn
   deriving (Eq,Show,Ord)
 
+-- manually edited code
+
 printPosn :: Posn -> String
 printPosn (Pn _ l c) = show l ++ ":" ++ show c
 
 tokenPos :: [Token] -> String
 tokenPos (t:_) = printPosn (tokenPosn t)
-tokenPos [] = "end of file"
+tokenPos [] = "EOF"
 
 tokenPosn :: Token -> Posn
 tokenPosn (PT p _) = p

@@ -36,9 +36,9 @@ compileFile filename = do
   tokenized <- return $ myLexer program
   case (pProgram tokenized) of
     (Ok p) -> do
+      putStr $ unlines $ lines program
       putStrLn $ show p
     (Bad p) -> do
-      putStrLn $ show tokenized
       putStrLn $ filename ++ p
 
 compileFiles :: [FilePath] -> IO()
