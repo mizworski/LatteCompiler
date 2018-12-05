@@ -14,7 +14,7 @@ main = do
       case (pProgram $ myLexer program) of
         (Ok p) -> do
           putStrLn $ show p
-        (Bad p) -> do
-          putStrLn $ "Syntax error"
+        (Bad errMsg) -> do
+          putStrLn $ filename ++ errMsg
     _ -> do
       putStrLn "Wrong number of arguments"

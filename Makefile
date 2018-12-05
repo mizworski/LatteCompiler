@@ -4,17 +4,21 @@ install-deps:
 	cabal update; \
 	cabal install mtl
 
-build:
-	stack setup 8.2.2; \
+build-bnfc:
 	stack build BNFC; \
 	cd src; \
 	stack exec bnfc -- -p Frontend --functor -m Frontend/Latte.cf; \
 	make; \
-	mv Frontend/TestLatte ../; \
-	rm Frontend/TestLatte.hs; \
-	rm Makefile; \
-	rm Frontend/LexLatte.x; \
-	rm Frontend/ParLatte.y;
+	mv Frontend/TestLatte ../;
+
+clean-bnfc:
+	rm src/Frontend/LexLatte.x; \
+	rm src/Frontend/ParLatte.y; \
+	rm src/Frontend/TestLatte.hs; \
+
+build:
+	stack setup 8.2.2; \
+	stack build;
 
 clean:
 	stack clean; \
@@ -22,3 +26,4 @@ clean:
 	rm -f src/Frontend/*Latte.txt; \
 	rm -f TestLatte; \
 	rm -f src/Frontend/ErrM.hs;
+	rm -f src/Frontend/TestLatte.hs; \

@@ -25,8 +25,10 @@ main = do
 compileFile :: String -> IO()
 compileFile filename = do
   program <- readFile filename
-  case (pProgram $ myLexer program) of
+  tokenized <- return $ myLexer program
+  case (pProgram tokenized) of
     (Ok p) -> do
       putStrLn $ show p
     (Bad p) -> do
-      putStrLn $ "Syntax error"
+      putStrLn $ show tokenized
+      putStrLn p
