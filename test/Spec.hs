@@ -22,10 +22,10 @@ main = do
 
   putStrLn "------------------"
 
-  putStrLn "Testing correct programs"
-  goodDir <- return "test/good"
-  goodFilenames <- listDirectory goodDir
-  compileFiles $ [goodDir ++ "/" ++ fn | fn <- goodFilenames, ".lat" `isSuffixOf` fn]
+--   putStrLn "Testing correct programs"
+--   goodDir <- return "test/good"
+--   goodFilenames <- listDirectory goodDir
+--   compileFiles $ [goodDir ++ "/" ++ fn | fn <- goodFilenames, ".lat" `isSuffixOf` fn]
 
   putStrLn "------------------"
 
@@ -39,13 +39,12 @@ compileFile filename = do
       putStrLn $ show p
     (Bad p) -> do
       putStrLn $ show tokenized
-      putStrLn p
+      putStrLn $ filename ++ p
 
 compileFiles :: [FilePath] -> IO()
 compileFiles ([]) = return ()
 compileFiles (fp:fps) = do
   putStrLn "------------------"
   putStrLn fp
-  putStrLn "------------------"
   compileFile fp
   compileFiles fps

@@ -959,18 +959,22 @@ returnM = return
 thenM :: Err a -> (a -> Err b) -> Err b
 thenM = (>>=)
 
+-- manually modified this chunk of code
+
 getExpectedTokensStr ets = getExpectedTokensStr' ets "" where
+  -- todo is this case possible?
   getExpectedTokensStr' [] str = "<INTERNAL ERROR>"
   getExpectedTokensStr' (et:[]) str = str ++ et
   getExpectedTokensStr' (et:ets) str = getExpectedTokensStr' ets (str ++ et ++ ", ")
 
 happyError :: [Token] -> [String] -> Err a
 happyError ts ets =
-  Bad $ ":" ++ tokenPos ts ++ ": expected " ++ getExpectedTokensStr ets ++
+  Bad $ ":" ++ tokenPos ts ++
   case ts of
-    [] -> []
+    [] -> " unknown error"
     [Err _] -> " due to lexer error"
-    t:_ -> " before '" ++ id(prToken t) ++ "' token"
+    (PT _ (TS "/" _)):(PT _ (TS "*" _)):_ -> ": unterminated comment"
+    t:_ -> ": expected " ++ getExpectedTokensStr ets ++ " before '" ++ id(prToken t) ++ "' token"
 
 myLexer = tokens
 
