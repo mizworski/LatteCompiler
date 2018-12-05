@@ -51,3 +51,4 @@ tests:
     - LatteCompiler
     - tasty
     - tasty-hunit
+    - directory

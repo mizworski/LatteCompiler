@@ -3,6 +3,8 @@ module Main where
 import Test.Tasty
 import Test.Tasty.HUnit
 import System.Environment
+import System.Directory
+import Data.List
 
 import Frontend.ErrM
 import Frontend.ParLatte
@@ -12,12 +14,18 @@ main :: IO ()
 main = do
   putStrLn ""
   putStrLn "------------------"
+
   putStrLn "Testing programs with erros."
-  compileFile "test/bad/bad001.lat"
+  badDir <- return "test/bad"
+  badFilenames <- listDirectory badDir
+  compileFiles $ [badDir ++ "/" ++ fn | fn <- badFilenames]
 
   putStrLn "------------------"
-  putStrLn "Testing correct programs."
-  compileFile "test/good/core002.lat"
+
+  putStrLn "Testing correct programs"
+  goodDir <- return "test/good"
+  goodFilenames <- listDirectory goodDir
+  compileFiles $ [goodDir ++ "/" ++ fn | fn <- goodFilenames, ".lat" `isSuffixOf` fn]
 
   putStrLn "------------------"
 
@@ -32,3 +40,12 @@ compileFile filename = do
     (Bad p) -> do
       putStrLn $ show tokenized
       putStrLn p
+
+compileFiles :: [FilePath] -> IO()
+compileFiles ([]) = return ()
+compileFiles (fp:fps) = do
+  putStrLn "------------------"
+  putStrLn fp
+  putStrLn "------------------"
+  compileFile fp
+  compileFiles fps
