@@ -5,9 +5,11 @@ import Test.Tasty.HUnit
 import System.Environment
 import System.Directory
 import Data.List
+import Control.Monad.Except
 
 import Frontend.ErrM
 import Frontend.ParLatte
+import Frontend.SemanticAnalysis
 
 
 main :: IO ()
@@ -18,7 +20,7 @@ main = do
   putStrLn "Testing programs with erros."
   badDir <- return "test/bad"
   badFilenames <- listDirectory badDir
-  compileFiles $ [badDir ++ "/" ++ fn | fn <- badFilenames]
+  compileFiles $ sort $ [badDir ++ "/" ++ fn | fn <- badFilenames]
 
   putStrLn "------------------"
 
@@ -37,7 +39,14 @@ compileFile filename = do
   case (pProgram tokenized) of
     (Ok p) -> do
       putStr $ unlines $ lines program
-      putStrLn $ show p
+      typeCheckRes <- runExceptT $ semanticAnalysis p
+      case typeCheckRes of
+        (Left errMsg) -> do
+          putStrLn $ filename ++ errMsg
+        otherwise -> do
+          putStrLn $ show p
+          return()
+
     (Bad p) -> do
       putStrLn $ filename ++ p
 

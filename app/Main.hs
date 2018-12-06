@@ -2,7 +2,9 @@ module Main where
 
 import Frontend.ErrM
 import Frontend.ParLatte
+import Frontend.SemanticAnalysis
 
+import Control.Monad.Except
 import System.Environment
 
 main :: IO()
@@ -13,7 +15,14 @@ main = do
       program <- readFile filename
       case (pProgram $ myLexer program) of
         (Ok p) -> do
-          putStrLn $ show p
+          putStr $ unlines $ lines program
+          typeCheckRes <- runExceptT $ semanticAnalysis p
+          case typeCheckRes of
+            (Left errMsg) -> do
+              putStrLn $ filename ++ errMsg
+            otherwise -> do
+              putStrLn $ show p
+              return()
         (Bad errMsg) -> do
           putStrLn $ filename ++ errMsg
     _ -> do
