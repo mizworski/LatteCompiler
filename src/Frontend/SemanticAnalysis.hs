@@ -20,13 +20,13 @@ semanticAnalysis' :: TProgram -> PartialResult ()
 semanticAnalysis' (Program _ dfs) = do
   env <- checkFunctionSignatures dfs
   local (const env) $ checkFunctionsBody dfs
+  -- todo checkExpressionType
   -- todo check undeclared variables
-  -- todo check multiple declarations of same variable
-  -- todo check assignment types
+  -- todo blockStatements
   -- todo non reachable / always reachable branches
   -- todo check if correct argument types
   -- todo check operations types
-  -- todo check arguments for built-in fns
+  -- todo built in fns
   -- todo check number of arguments
   -- todo comparison types
 
@@ -77,6 +77,28 @@ checkStatement (Ret pos expr) retType = do
                                                             ++"' with expected '" ++ (show retType) ++ "'"
         otherwise -> throwError $ tokenPos pos ++ " incorrect return type"
         -- not checking void type as checkType should never return void type
+
+-- todo are items nonempty?
+checkStatement (Decl dpos dtype []) _ = do
+  env <- ask
+  return $ Just env
+
+checkStatement (Decl dpos dtype ((NoInit ipos ident):items)) rtype = do
+  env <- ask
+  case (Data.Set.member ident (usedNames env)) of
+    True -> throwError $ tokenPos ipos ++ " variable name already in use"
+    otherwise -> do
+      env' <- local (const env) $ declare ident dtype
+      local (const env') $ checkStatement (Decl dpos dtype items) rtype
+
+checkStatement (Decl dpos dtype ((Init ipos ident expr):items)) rtype = do
+  actualType <- checkType expr
+  case (actualType == dtype) of
+    True -> checkStatement (Decl dpos dtype ((NoInit ipos ident):items)) rtype
+    otherwise -> throwError $ tokenPos ipos ++ " couldn't match actual type '" ++ (show actualType)
+                                            ++ "' with expected '" ++ (show dtype) ++ "'"
+
+
 
 checkStatement stmt retType = do
   env <- ask
