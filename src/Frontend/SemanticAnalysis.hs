@@ -116,9 +116,6 @@ checkStatement (Ret _ expr) retType = do
         (Fun pos rtype atypes) -> throwError $ tokenPos pos ++ " couldn't match actual type '"
                                                             ++ (show $ Fun pos rtype atypes)
                                                             ++"' with expected '" ++ (show retType) ++ "'"
-
-        --todo
---         otherwise -> throwError $ tokenPos pos ++ " incorrect return type"
         -- not checking void type as checkType should never return void type
 
 checkStatement (VRet _) retType = do
@@ -157,20 +154,28 @@ checkType :: TExpr -> PartialResult TType
 checkType (EVar pos ident) = do
   env <- ask
   case (Data.Map.member ident (vars env)) of
-      False -> throwError $ tokenPos pos ++ " variable '" ++ (showVarName ident) ++ "' not declared"
-      otherwise -> do
-        state <- get
-        (Just loc) <- return $ Data.Map.lookup ident (vars env)
-        (Just vtype) <- return $ Data.Map.lookup loc state
-        -- change pos from where var was declared to where it is called
-        return $ changePos vtype pos
+    False -> throwError $ tokenPos pos ++ " variable '" ++ (showVarName ident) ++ "' not declared"
+    otherwise -> do
+      state <- get
+      (Just loc) <- return $ Data.Map.lookup ident (vars env)
+      (Just vtype) <- return $ Data.Map.lookup loc state
+      -- change pos from where var was declared to where it is called
+      return $ changePos vtype pos
 
 checkType (ELitInt pos _) = return $ Int pos
 checkType (ELitTrue pos) = return $ Bool pos
 checkType (ELitFalse pos) = return $ Bool pos
 checkType (EApp pos ident args) = do
-  -- todo
-  return $ Str (Just (0,0))
+  env <- ask
+  case (Data.Map.member ident (vars env)) of
+    False -> throwError $ tokenPos pos ++ " function '" ++ (showVarName ident) ++ "' not declared"
+    otherwise -> do
+      state <- get
+      (Just loc) <- return $ Data.Map.lookup ident (vars env)
+      (Just (Fun _ retType argTypes)) <- return $ Data.Map.lookup loc state
+      checkArgs args argTypes pos
+      return $ changePos retType pos
+
 checkType (EString pos _) = return $ Str pos
 checkType (Neg pos expr) = do
   actualType <- checkType expr
@@ -260,6 +265,16 @@ checkArgNames' ((Arg pos _ (Ident name)):args) names
   | Data.Set.member name names = throwError $ tokenPos pos ++ " repeated argument name '" ++ name ++ "'"
   | otherwise = checkArgNames' args (Data.Set.insert name names)
 
+checkArgs :: [TExpr] -> [TType] -> SPos -> PartialResult Env
+checkArgs [] [] _ = ask
+checkArgs [] _ pos = throwError $ tokenPos pos ++ " not enough arguments passed to function"
+checkArgs _ [] pos = throwError $ tokenPos pos ++ " too many arguments passed to function"
+checkArgs (expr:exprs) (expectedType:argTypes) pos = do
+  actualType <- checkType expr
+  case (actualType == expectedType) of
+    True -> checkArgs exprs argTypes pos
+    otherwise -> throwError $ tokenPos (getPos actualType) ++ " couldn't match actual type '" ++ (show actualType)
+                                                           ++ "' with expected '" ++ (show expectedType) ++ "'"
 
 tokenPos :: Maybe (Int, Int) -> String
 tokenPos Nothing = "\n Something went wrong \n"
