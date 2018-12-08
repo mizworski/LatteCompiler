@@ -24,12 +24,6 @@ semanticAnalysis' (Program _ dfs) = do
   -- todo While
   -- todo non reachable / always reachable branches
 
-  -- todo checkExpressionType
-  -- todo check if correct argument types
-  -- todo check operations types
-  -- todo check number of arguments
-  -- todo comparison types
-
   -- todo built in fns
 
 --   return ()
@@ -95,8 +89,8 @@ checkStatement (Ass apos ident expr) retType = do
       (Just expectedType) <- return $ Data.Map.lookup loc state
       case (actualType == expectedType) of
         True -> return $ Just env
-        otherwise -> throwError $ tokenPos (getPos actualType) ++ " couldn't match actual type '" ++ (show actualType)
-                                                               ++ "' with expected '" ++ (show expectedType) ++ "'"
+        otherwise -> throwError $ tokenPos (getPos actualType) ++ " assigning expression of type '" ++ (show actualType)
+                                                               ++ "' to variable of type '" ++ (show expectedType) ++ "'"
 
 checkStatement (Incr pos ident) _ = checkIncDec pos ident "incremented"
 checkStatement (Decr pos ident) _ = checkIncDec pos ident "decremented"
@@ -177,19 +171,115 @@ checkType (EApp pos ident args) = do
       return $ changePos retType pos
 
 checkType (EString pos _) = return $ Str pos
+
 checkType (Neg pos expr) = do
   actualType <- checkType expr
   case (actualType == Int (Just (0,0))) of
     True -> return $ Int pos
     otherwise -> throwError " operator '-' can be used only in front of integer expressions"
+
 checkType (Not pos expr) = do
   actualType <- checkType expr
   case (actualType == Bool (Just (0,0))) of
     True -> return $ Bool pos
     otherwise -> throwError " operator '!' can be used only in front of boolean expressions"
 
-checkType expr = return $ Int (Just (0,0))
 
+checkType (EMul pos expr1 op expr2) = do
+  actualType <- checkType expr1
+  case (actualType == Int (Just (0,0))) of
+    True -> do
+      checkOperandTypes expr1 expr2
+      return $ Int pos
+    otherwise -> throwError $ tokenPos pos ++ "'" ++ (show op) ++ "' can be performend only on integer operands"
+
+checkType (EAdd pos expr1 op expr2) = do
+  actualType <- checkType expr1
+  case (actualType == Int (Just (0,0))) of
+    True -> do
+      checkOperandTypes expr1 expr2
+      return $ Int pos
+    otherwise -> do
+      case (actualType == Str (Just (0,0)) && op == Plus (Just (0,0))) of
+        True -> do
+          checkOperandTypes expr1 expr2
+          return $ Str pos
+        otherwise -> throwError $ tokenPos pos ++ "'" ++ (show op) ++ "' can't be performed on '"
+                                               ++ (show actualType) ++ "' operand"
+
+checkType (ERel pos expr1 op expr2) = do
+  actualType <- checkType expr1
+  case op of
+    -- todo how to simplify this copypasta?
+    (GE _) -> do
+      case actualType of
+        (Int _) -> do
+          checkOperandTypes expr1 expr2
+          return $ Bool pos
+        otherwise -> throwError $ tokenPos pos ++ "'" ++ (show op) ++ "' can't be performed on '"
+                                               ++ (show actualType) ++ "' operand"
+    (GTH _) -> do
+      case actualType of
+        (Int _) -> do
+          checkOperandTypes expr1 expr2
+          return $ Bool pos
+        otherwise -> throwError $ tokenPos pos ++ "'" ++ (show op) ++ "' can't be performed on '"
+                                               ++ (show actualType) ++ "' operand"
+    (LE _) -> do
+      case actualType of
+        (Int _) -> do
+          checkOperandTypes expr1 expr2
+          return $ Bool pos
+        otherwise -> throwError $ tokenPos pos ++ "'" ++ (show op) ++ "' can't be performed on '"
+                                               ++ (show actualType) ++ "' operand"
+    (LTH _) -> do
+      case actualType of
+        (Int _) -> do
+          checkOperandTypes expr1 expr2
+          return $ Bool pos
+        otherwise -> throwError $ tokenPos pos ++ "'" ++ (show op) ++ "' can't be performed on '"
+                                               ++ (show actualType) ++ "' operand"
+    otherwise -> do
+      -- EQ / NEQ only on Int, Bool and Str
+      case actualType of
+        (Int _) -> do
+          checkOperandTypes expr1 expr2
+          return $ Bool pos
+        (Bool _) -> do
+          checkOperandTypes expr1 expr2
+          return $ Bool pos
+        (Str _) -> do
+          checkOperandTypes expr1 expr2
+          return $ Bool pos
+        otherwise -> throwError $ tokenPos pos ++ "'" ++ (show op) ++ "' can't be performed on '"
+                                                      ++ (show actualType) ++ "' operand"
+
+checkType (EAnd pos expr1 expr2) = do
+  actualType <- checkType expr1
+  case (actualType == Bool (Just (0,0))) of
+    True -> do
+      checkOperandTypes expr1 expr2
+      return $ Bool pos
+    otherwise -> throwError $ tokenPos pos ++ " logical 'and' can be performend only on boolean operands."
+
+checkType (EOr pos expr1 expr2) = do
+  actualType <- checkType expr1
+  case (actualType == Bool (Just (0,0))) of
+    True -> do
+      checkOperandTypes expr1 expr2
+      return $ Bool pos
+    otherwise -> throwError $ tokenPos pos ++ " logical 'or' can be performend only on boolean operands."
+
+-- checkType expr = return $ Int (Just (0,0))
+
+checkOperandTypes :: TExpr -> TExpr -> PartialResult ()
+checkOperandTypes expr1 expr2 = do
+  actualType1 <- checkType expr1
+  actualType2 <- checkType expr2
+  case (actualType1 == actualType2) of
+    False -> throwError $ tokenPos (getPos actualType1) ++ " operands types mismatch - left type: '" ++ (show actualType1)
+                                                        ++ "', right type: '" ++ (show actualType2) ++ "'"
+    otherwise -> return ()
 
 checkFunctionSignatures :: [TTopDef] -> PartialResult Env
 checkFunctionSignatures [] = do

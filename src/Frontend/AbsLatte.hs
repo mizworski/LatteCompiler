@@ -128,7 +128,12 @@ instance Functor Expr where
         EAnd a expr1 expr2 -> EAnd (f a) (fmap f expr1) (fmap f expr2)
         EOr a expr1 expr2 -> EOr (f a) (fmap f expr1) (fmap f expr2)
 data AddOp a = Plus a | Minus a
-  deriving (Eq, Ord, Show, Read)
+  deriving (Ord, Show, Read)
+
+instance Eq (AddOp a) where
+  (Plus _) == (Plus _) = True
+  (Minus _) == (Minus _) = True
+  _ == _ = False
 
 instance Functor AddOp where
     fmap f x = case x of
@@ -143,7 +148,16 @@ instance Functor MulOp where
         Div a -> Div (f a)
         Mod a -> Mod (f a)
 data RelOp a = LTH a | LE a | GTH a | GE a | EQU a | NE a
-  deriving (Eq, Ord, Show, Read)
+  deriving (Ord, Show, Read)
+
+instance Eq (RelOp a) where
+  (LTH _) == (LTH _) = True
+  (LE _) == (LE _) = True
+  (GTH _) == (GTH _) = True
+  (GE _) == (GE _) = True
+  (EQU _) == (EQU _) = True
+  (NE _) == (NE _) = True
+  _ == _ = False
 
 instance Functor RelOp where
     fmap f x = case x of
