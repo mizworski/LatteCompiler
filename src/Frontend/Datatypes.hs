@@ -10,6 +10,8 @@ import Frontend.AbsLatte
 
 type SPos = Maybe (Int, Int)
 type TType = Type SPos
+type Computation = (EndStatus, Env)
+data EndStatus = Running | MaybeEnded | Ended
 
 
 type TArg = Arg (Maybe (Int, Int))

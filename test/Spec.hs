@@ -38,12 +38,12 @@ compileFile filename = do
   tokenized <- return $ myLexer program
   case (pProgram tokenized) of
     (Ok p) -> do
-      putStr $ unlines $ lines program
       typeCheckRes <- runExceptT $ semanticAnalysis p
       case typeCheckRes of
         (Left errMsg) -> do
           putStrLn $ filename ++ errMsg
         otherwise -> do
+          putStr $ unlines $ lines program
           putStrLn $ show p
           return()
 

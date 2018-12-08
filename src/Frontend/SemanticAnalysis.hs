@@ -25,7 +25,7 @@ semanticAnalysis' (Program _ dfs) = do
   -- todo non reachable / always reachable branches
 
   -- todo built in fns
-
+  -- todo forbid using function names as variables (in blocks)
 --   return ()
 
 checkFunctionsBody :: [TTopDef] -> PartialResult ()
@@ -37,7 +37,6 @@ checkFunctionsBody ((FnDef pos retType _ args (Block _ stmts)):dfs) = do
   checkFunctionsBody dfs
 
 checkStatements :: SPos -> TType -> [TStmt] -> PartialResult ()
--- todo function 'f' has no return
 checkStatements pos _ [] = throwError $ tokenPos pos ++ " function has no return"
 checkStatements pos retType (stmt:stmts) = do
   res <- checkStatement stmt retType
@@ -126,10 +125,60 @@ checkStatement (SExp _ expr) _ = do
   env <- ask
   return $ Just env
 
-checkStatement stmt retType = do
-  env <- ask
-  return $ Just env
+checkStatement (Cond pos bexpr ifTrueStmt) retType = do
+  res <- checkBoolConstexpr bexpr pos
+  case res of
+    (Just False) -> do
+      env <- ask
+      return $ Just env
+    (Just True) -> checkStatement ifTrueStmt retType
+    otherwise -> do
+      checkStatement ifTrueStmt retType
+      env <- ask
+      return $ Just env
 
+checkStatement (CondElse pos bexpr ifTrueStmt ifFalseStmt) retType = do
+  res <- checkBoolConstexpr bexpr pos
+  case res of
+    (Just False) -> checkStatement ifFalseStmt retType
+    (Just True) -> checkStatement ifTrueStmt retType
+    otherwise -> do
+      resTrue <- checkStatement ifFalseStmt retType
+      case resTrue of
+        Nothing -> do
+          resFalse <- checkStatement ifTrueStmt retType
+          case resFalse of
+            Nothing -> return Nothing
+
+      env <- ask
+      return $ Just env
+
+checkStatement (While pos bexpr loopBody) retType = do
+  res <- checkBoolConstexpr bexpr pos
+  case res of
+    (Just False) -> do
+      env <- ask
+      return $ Just env
+    -- for (Just False) case we don't need guaranteed return of body to avoid loop while True: i+=1; if i < 5: return;
+    otherwise -> do
+      checkStatement loopBody retType
+      env <- ask
+      return $ Just env
+
+-- checkStatement stmt retType = do
+--   env <- ask
+--   return $ Just env
+
+checkBoolConstexpr :: TExpr -> SPos -> PartialResult (Maybe Bool)
+-- todo simplify more?
+checkBoolConstexpr (ELitTrue _) _ = return $ Just True
+checkBoolConstexpr (ELitFalse _) _ = return $ Just False
+checkBoolConstexpr expr pos = do
+  exprType <- checkType expr
+  case (exprType == Bool (Just (0,0))) of
+    True -> return Nothing
+    otherwise -> throwError $ tokenPos pos ++ " 'if' condition must be boolean expression, got '"
+                                           ++ (show exprType) ++ "'"
 
 checkIncDec :: SPos -> Ident -> String -> PartialResult (Maybe Env)
 checkIncDec pos ident incdec = do
