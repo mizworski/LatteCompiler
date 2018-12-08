@@ -22,7 +22,6 @@ semanticAnalysis' (Program _ dfs) = do
   local (const env) $ checkFunctionsBody dfs
   -- todo checkExpressionType
   -- todo check undeclared variables
-  -- todo blockStatements
   -- todo non reachable / always reachable branches
   -- todo check if correct argument types
   -- todo check operations types
@@ -75,10 +74,19 @@ checkStatement (Ret pos expr) retType = do
         (Fun pos rtype atypes) -> throwError $ tokenPos pos ++ " Couldn't match actual type '"
                                                             ++ (show $ Fun pos rtype atypes)
                                                             ++"' with expected '" ++ (show retType) ++ "'"
+
+        --todo
         otherwise -> throwError $ tokenPos pos ++ " incorrect return type"
         -- not checking void type as checkType should never return void type
 
--- todo are items nonempty?
+checkStatement (BStmt _ (Block bpos stmts)) retType = do
+  env <- ask
+  -- todo can override function name then
+  env' <- return $ Env {vars = vars env, usedNames = Data.Set.empty}
+  local (const env') $ checkStatements bpos retType stmts
+  return $ Just env
+
+-- todo are items nonempty? [int;]
 checkStatement (Decl dpos dtype []) _ = do
   env <- ask
   return $ Just env
@@ -86,7 +94,7 @@ checkStatement (Decl dpos dtype []) _ = do
 checkStatement (Decl dpos dtype ((NoInit ipos ident):items)) rtype = do
   env <- ask
   case (Data.Set.member ident (usedNames env)) of
-    True -> throwError $ tokenPos ipos ++ " variable name already in use"
+    True -> throwError $ tokenPos ipos ++ " variable name already declared in this block"
     otherwise -> do
       env' <- local (const env) $ declare ident dtype
       local (const env') $ checkStatement (Decl dpos dtype items) rtype
@@ -98,7 +106,19 @@ checkStatement (Decl dpos dtype ((Init ipos ident expr):items)) rtype = do
     otherwise -> throwError $ tokenPos ipos ++ " couldn't match actual type '" ++ (show actualType)
                                             ++ "' with expected '" ++ (show dtype) ++ "'"
 
-
+checkStatement (Ass apos ident expr) retType = do
+  env <- ask
+  case (Data.Map.member ident (vars env)) of
+    False -> throwError $ tokenPos apos ++ " variable '" ++ (showVarName ident) ++ "' not declared"
+    otherwise -> do
+      actualType <- checkType expr
+      state <- get
+      (Just loc) <- return $ Data.Map.lookup ident (vars env)
+      (Just expectedType) <- return $ Data.Map.lookup loc state
+      case (actualType == expectedType) of
+        True -> return $ Just env
+        otherwise -> throwError $ tokenPos apos ++ " couldn't match actual type '" ++ (show actualType)
+                                                ++ "' with expected '" ++ (show expectedType) ++ "'"
 
 checkStatement stmt retType = do
   env <- ask
