@@ -20,14 +20,17 @@ semanticAnalysis' :: TProgram -> PartialResult ()
 semanticAnalysis' (Program _ dfs) = do
   env <- checkFunctionSignatures dfs
   local (const env) $ checkFunctionsBody dfs
-  -- todo checkExpressionType
-  -- todo check undeclared variables
+  -- todo If/IfElse
+  -- todo While
   -- todo non reachable / always reachable branches
+
+  -- todo checkExpressionType
   -- todo check if correct argument types
   -- todo check operations types
-  -- todo built in fns
   -- todo check number of arguments
   -- todo comparison types
+
+  -- todo built in fns
 
 --   return ()
 
@@ -50,35 +53,6 @@ checkStatements pos retType (stmt:stmts) = do
     otherwise -> return ()
 
 checkStatement :: TStmt -> TType ->  PartialResult (Maybe Env)
-checkStatement (VRet pos) retType = do
-  case retType of
-    (Void _) -> return Nothing -- Nothing = Function returned
-    (Int pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Void' with expected 'Int'"
-    (Str pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Void' with expected 'Str'"
-    (Bool pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Void' with expected 'Bool'"
-    (Fun pos rtype atypes) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Void' with expected '" ++
-                              (show $ Fun pos rtype atypes) ++ "'"
-
-checkStatement (Ret pos expr) retType = do
-  actualType <- checkType expr
-  case (actualType == retType) of
-    True -> return Nothing
-    otherwise -> do
-      case actualType of
-        (Int pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Int' with expected '"
-                                               ++ (show retType) ++ "'"
-        (Str pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Str' with expected '"
-                                               ++ (show retType) ++ "'"
-        (Bool pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Bool' with expected '"
-                                                ++ (show retType) ++ "'"
-        (Fun pos rtype atypes) -> throwError $ tokenPos pos ++ " Couldn't match actual type '"
-                                                            ++ (show $ Fun pos rtype atypes)
-                                                            ++"' with expected '" ++ (show retType) ++ "'"
-
-        --todo
-        otherwise -> throwError $ tokenPos pos ++ " incorrect return type"
-        -- not checking void type as checkType should never return void type
-
 checkStatement (Empty _) _ = do
   env <- ask
   return $ Just env
@@ -107,8 +81,8 @@ checkStatement (Decl dpos dtype ((Init ipos ident expr):items)) rtype = do
   actualType <- checkType expr
   case (actualType == dtype) of
     True -> checkStatement (Decl dpos dtype ((NoInit ipos ident):items)) rtype
-    otherwise -> throwError $ tokenPos ipos ++ " couldn't match actual type '" ++ (show actualType)
-                                            ++ "' with expected '" ++ (show dtype) ++ "'"
+    otherwise -> throwError $ tokenPos (getPos actualType) ++ " couldn't match actual type '" ++ (show actualType)
+                                                           ++ "' with expected '" ++ (show dtype) ++ "'"
 
 checkStatement (Ass apos ident expr) retType = do
   env <- ask
@@ -121,11 +95,45 @@ checkStatement (Ass apos ident expr) retType = do
       (Just expectedType) <- return $ Data.Map.lookup loc state
       case (actualType == expectedType) of
         True -> return $ Just env
-        otherwise -> throwError $ tokenPos apos ++ " couldn't match actual type '" ++ (show actualType)
-                                                ++ "' with expected '" ++ (show expectedType) ++ "'"
+        otherwise -> throwError $ tokenPos (getPos actualType) ++ " couldn't match actual type '" ++ (show actualType)
+                                                               ++ "' with expected '" ++ (show expectedType) ++ "'"
 
 checkStatement (Incr pos ident) _ = checkIncDec pos ident "incremented"
 checkStatement (Decr pos ident) _ = checkIncDec pos ident "decremented"
+
+checkStatement (Ret _ expr) retType = do
+  actualType <- checkType expr
+  case (actualType == retType) of
+    True -> return Nothing
+    otherwise -> do
+      case actualType of
+        (Int pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Int' with expected '"
+                                               ++ (show retType) ++ "'"
+        (Str pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Str' with expected '"
+                                               ++ (show retType) ++ "'"
+        (Bool pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Bool' with expected '"
+                                                ++ (show retType) ++ "'"
+        (Fun pos rtype atypes) -> throwError $ tokenPos pos ++ " couldn't match actual type '"
+                                                            ++ (show $ Fun pos rtype atypes)
+                                                            ++"' with expected '" ++ (show retType) ++ "'"
+
+        --todo
+--         otherwise -> throwError $ tokenPos pos ++ " incorrect return type"
+        -- not checking void type as checkType should never return void type
+
+checkStatement (VRet _) retType = do
+  case retType of
+    (Void _) -> return Nothing -- Nothing = Function returned
+    (Int pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Void' with expected 'Int'"
+    (Str pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Void' with expected 'Str'"
+    (Bool pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Void' with expected 'Bool'"
+    (Fun pos rtype atypes) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Void' with expected '" ++
+                              (show $ Fun pos rtype atypes) ++ "'"
+
+checkStatement (SExp _ expr) _ = do
+  checkType expr
+  env <- ask
+  return $ Just env
 
 checkStatement stmt retType = do
   env <- ask
@@ -146,6 +154,35 @@ checkIncDec pos ident incdec = do
         otherwise -> throwError $ tokenPos pos ++ " only integers can be " ++ incdec ++ ", got '" ++ (show vtype) ++ "'"
 
 checkType :: TExpr -> PartialResult TType
+checkType (EVar pos ident) = do
+  env <- ask
+  case (Data.Map.member ident (vars env)) of
+      False -> throwError $ tokenPos pos ++ " variable '" ++ (showVarName ident) ++ "' not declared"
+      otherwise -> do
+        state <- get
+        (Just loc) <- return $ Data.Map.lookup ident (vars env)
+        (Just vtype) <- return $ Data.Map.lookup loc state
+        -- change pos from where var was declared to where it is called
+        return $ changePos vtype pos
+
+checkType (ELitInt pos _) = return $ Int pos
+checkType (ELitTrue pos) = return $ Bool pos
+checkType (ELitFalse pos) = return $ Bool pos
+checkType (EApp pos ident args) = do
+  -- todo
+  return $ Str (Just (0,0))
+checkType (EString pos _) = return $ Str pos
+checkType (Neg pos expr) = do
+  actualType <- checkType expr
+  case (actualType == Int (Just (0,0))) of
+    True -> return $ Int pos
+    otherwise -> throwError " operator '-' can be used only in front of integer expressions"
+checkType (Not pos expr) = do
+  actualType <- checkType expr
+  case (actualType == Bool (Just (0,0))) of
+    True -> return $ Bool pos
+    otherwise -> throwError " operator '!' can be used only in front of boolean expressions"
+
 checkType expr = return $ Int (Just (0,0))
 
 
@@ -178,16 +215,15 @@ checkFunctionSignatures ((FnDef pos retType fname args _):dfs) = do
 declareArguments :: [TArg] -> PartialResult Env
 declareArguments [] = ask
 declareArguments ((Arg _ argtype argname):args) = do
-  env <- ask
-  env' <- declare argname argtype
-  declareArguments args
+  env <- declare argname argtype
+  local (const env) $ declareArguments args
 
 
 declare :: Ident -> TType -> PartialResult Env
 declare varName varType = do
   env <- ask
   loc <- newloc
-  modify $ Data.Map.insert loc (varType)
+  modify $ Data.Map.insert loc varType
   return $ Env {vars = Data.Map.insert varName loc (vars env), usedNames = Data.Set.insert varName (usedNames env)}
 
 
@@ -228,3 +264,17 @@ checkArgNames' ((Arg pos _ (Ident name)):args) names
 tokenPos :: Maybe (Int, Int) -> String
 tokenPos Nothing = "\n Something went wrong \n"
 tokenPos (Just (r,c)) = ":" ++ (show r) ++ ":" ++ (show c) ++ ":"
+
+getPos :: TType -> Maybe (Int, Int)
+getPos (Int pos) = pos
+getPos (Str pos) = pos
+getPos (Bool pos) = pos
+getPos (Void pos) = pos
+getPos (Fun pos _ _) = pos
+
+changePos :: TType -> SPos -> TType
+changePos (Int _) pos = Int pos
+changePos (Str _) pos = Str pos
+changePos (Bool _) pos = Bool pos
+changePos (Void _) pos = Void pos
+changePos (Fun _ rtype atypes) pos = Fun pos rtype atypes
