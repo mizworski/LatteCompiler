@@ -11,27 +11,86 @@ import Control.Monad.Except
 
 semanticAnalysis :: TProgram -> TypeCheckResult ()
 semanticAnalysis program = do
-  runReaderT (runStateT (semanticAnalysis' program) Data.Map.empty) Data.Map.empty
+  runReaderT (runStateT (semanticAnalysis' program) Data.Map.empty)
+             (Env {vars = Data.Map.empty, usedNames = Data.Set.empty})
   return ()
 
--- semanticAnalysis' :: Env -> Store -> TProgram -> TypeCheckResult ()
--- semanticAnalysis' env store program = do
+
 semanticAnalysis' :: TProgram -> PartialResult ()
 semanticAnalysis' (Program _ dfs) = do
---   env <- ask
---   store <- get
   env <- checkFunctionSignatures dfs
-  -- todo save function signatures
-  -- todo (^and) repeated argument name
-  -- todo check if main exists
-  -- todo check functions body
-  return ()
+  local (const env) $ checkFunctionsBody dfs
+  -- todo check undeclared variables
+  -- todo check multiple declarations of same variable
+  -- todo check assignment types
+  -- todo non reachable / always reachable branches
+  -- todo check if correct argument types
+  -- todo check operations types
+  -- todo check arguments for built-in fns
+  -- todo check number of arguments
+  -- todo comparison types
+
+--   return ()
+
+checkFunctionsBody :: [TTopDef] -> PartialResult ()
+checkFunctionsBody [] = return()
+-- checkFunctionsBody ((FnDef pos retType _ args (Block _ [])):dfs) = throwError $ tokenPos pos ++ " empty function."
+checkFunctionsBody ((FnDef pos retType _ args (Block _ stmts)):dfs) = do
+  env <- declareArguments args
+  local (const env) $ checkStatements pos retType stmts
+  checkFunctionsBody dfs
+
+checkStatements :: SPos -> TType -> [TStmt] -> PartialResult ()
+-- todo function 'f' has no return
+checkStatements pos _ [] = throwError $ tokenPos pos ++ " function has no return"
+checkStatements pos retType (stmt:stmts) = do
+  res <- checkStatement stmt retType
+  case res of
+    (Just env) -> local (const env) $ checkStatements pos retType stmts
+    -- function returned
+    otherwise -> return ()
+
+checkStatement :: TStmt -> TType ->  PartialResult (Maybe Env)
+checkStatement (VRet pos) retType = do
+  case retType of
+    (Void _) -> return Nothing -- Nothing = Function returned
+    (Int pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Void' with expected 'Int'"
+    (Str pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Void' with expected 'Str'"
+    (Bool pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Void' with expected 'Bool'"
+    (Fun pos rtype atypes) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Void' with expected '" ++
+                              (show $ Fun pos rtype atypes) ++ "'"
+
+checkStatement (Ret pos expr) retType = do
+  actualType <- checkType expr
+  case (actualType == retType) of
+    True -> return Nothing
+    otherwise -> do
+      case actualType of
+        (Int pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Int' with expected '"
+                                               ++ (show retType) ++ "'"
+        (Str pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Str' with expected '"
+                                               ++ (show retType) ++ "'"
+        (Bool pos) -> throwError $ tokenPos pos ++ " Couldn't match actual type 'Bool' with expected '"
+                                                ++ (show retType) ++ "'"
+        (Fun pos rtype atypes) -> throwError $ tokenPos pos ++ " Couldn't match actual type '"
+                                                            ++ (show $ Fun pos rtype atypes)
+                                                            ++"' with expected '" ++ (show retType) ++ "'"
+        otherwise -> throwError $ tokenPos pos ++ " incorrect return type"
+        -- not checking void type as checkType should never return void type
+
+checkStatement stmt retType = do
+  env <- ask
+  return $ Just env
+
+
+checkType :: TExpr -> PartialResult TType
+checkType expr = return $ Int (Just (0,0))
+
 
 checkFunctionSignatures :: [TTopDef] -> PartialResult Env
 checkFunctionSignatures [] = do
   env <- ask
-  -- check if main exists
-  case (Data.Map.lookup (Ident "main") env) of
+  case (Data.Map.lookup (Ident "main") (vars env)) of
     Nothing -> throwError $ ":1:1: missing 'main' function"
     (Just loc) -> do
       state <- get
@@ -41,24 +100,33 @@ checkFunctionSignatures [] = do
         (Just (Fun pos _ [])) -> throwError $ tokenPos pos ++ " main function must return integer"
         otherwise -> throwError ":1:1: Internal memory error"
 
+
 checkFunctionSignatures ((FnDef pos retType fname args _):dfs) = do
   env <- ask
-  case (Data.Map.lookup fname env) of
+  case (Data.Map.lookup fname (vars env)) of
     Nothing -> do
       argTypes <- return $ getArgTypes args
---       if checkArgNames args then throwError ""
       checkArgNames args
       ftype <- return $ Fun pos retType argTypes
       env' <- declare fname ftype
       local (const env') $ checkFunctionSignatures dfs
     otherwise -> throwError $ tokenPos pos ++ " function name '" ++ (showVarName fname) ++ "' already in use."
 
+
+declareArguments :: [TArg] -> PartialResult Env
+declareArguments [] = ask
+declareArguments ((Arg _ argtype argname):args) = do
+  env <- ask
+  env' <- declare argname argtype
+  declareArguments args
+
+
 declare :: Ident -> TType -> PartialResult Env
 declare varName varType = do
   env <- ask
   loc <- newloc
   modify $ Data.Map.insert loc (varType)
-  return $ Data.Map.insert varName loc env
+  return $ Env {vars = Data.Map.insert varName loc (vars env), usedNames = Data.Set.insert varName (usedNames env)}
 
 
 newloc :: PartialResult Loc
@@ -66,28 +134,34 @@ newloc = do
   store <- get
   return $ hNewloc 0 store
 
+
 hNewloc :: Loc -> Store -> Loc
 hNewloc loc store =
   case Data.Map.lookup loc store of
     Nothing -> loc
     otherwise -> hNewloc (loc + 1) store
 
+
 showVarName :: Ident -> String
 showVarName (Ident fname) = fname
+
 
 getArgTypes :: [TArg] -> [TType]
 getArgTypes args = reverse $ getArgTypes' args [] where
   getArgTypes' [] acc = acc
   getArgTypes' ((Arg _ argType _):args) acc = getArgTypes' args (argType:acc)
 
+
 checkArgNames :: [TArg] -> PartialResult Env
 checkArgNames args = checkArgNames' args Data.Set.empty
+
 
 checkArgNames' :: [TArg] -> (Data.Set.Set String) -> PartialResult Env
 checkArgNames' [] _ = ask
 checkArgNames' ((Arg pos _ (Ident name)):args) names
   | Data.Set.member name names = throwError $ tokenPos pos ++ " repeated argument name '" ++ name ++ "'"
   | otherwise = checkArgNames' args (Data.Set.insert name names)
+
 
 tokenPos :: Maybe (Int, Int) -> String
 tokenPos Nothing = "\n Something went wrong \n"
