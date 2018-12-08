@@ -1,11 +1,12 @@
 module Main where
 
+import Control.Monad.Except
+import System.Environment
+
 import Frontend.ErrM
 import Frontend.ParLatte
 import Frontend.SemanticAnalysis
 
-import Control.Monad.Except
-import System.Environment
 
 main :: IO()
 main = do

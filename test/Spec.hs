@@ -1,11 +1,11 @@
 module Main where
 
-import Test.Tasty
-import Test.Tasty.HUnit
+import Control.Monad.Except
+import Data.List
 import System.Environment
 import System.Directory
-import Data.List
-import Control.Monad.Except
+import Test.Tasty
+import Test.Tasty.HUnit
 
 import Frontend.ErrM
 import Frontend.ParLatte
@@ -31,7 +31,6 @@ main = do
 
   putStrLn "------------------"
 
-
 compileFile :: String -> IO()
 compileFile filename = do
   program <- readFile filename
@@ -43,8 +42,7 @@ compileFile filename = do
         (Left errMsg) -> do
           putStrLn $ filename ++ errMsg
         otherwise -> do
-          putStr $ unlines $ lines program
-          putStrLn $ show p
+          putStrLn "Semantic analysis passed."
           return()
 
     (Bad p) -> do
