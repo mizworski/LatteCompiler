@@ -79,6 +79,10 @@ checkStatement (Ret pos expr) retType = do
         otherwise -> throwError $ tokenPos pos ++ " incorrect return type"
         -- not checking void type as checkType should never return void type
 
+checkStatement (Empty _) _ = do
+  env <- ask
+  return $ Just env
+
 checkStatement (BStmt _ (Block bpos stmts)) retType = do
   env <- ask
   -- todo can override function name then
@@ -120,10 +124,26 @@ checkStatement (Ass apos ident expr) retType = do
         otherwise -> throwError $ tokenPos apos ++ " couldn't match actual type '" ++ (show actualType)
                                                 ++ "' with expected '" ++ (show expectedType) ++ "'"
 
+checkStatement (Incr pos ident) _ = checkIncDec pos ident "incremented"
+checkStatement (Decr pos ident) _ = checkIncDec pos ident "decremented"
+
 checkStatement stmt retType = do
   env <- ask
   return $ Just env
 
+
+checkIncDec :: SPos -> Ident -> String -> PartialResult (Maybe Env)
+checkIncDec pos ident incdec = do
+  env <- ask
+  case (Data.Map.member ident (vars env)) of
+    False -> throwError $ tokenPos pos ++ " variable '" ++ (showVarName ident) ++ "' not declared"
+    otherwise -> do
+      state <- get
+      (Just loc) <- return $ Data.Map.lookup ident (vars env)
+      (Just vtype) <- return $ Data.Map.lookup loc state
+      case vtype of
+        (Int _) -> return $ Just env
+        otherwise -> throwError $ tokenPos pos ++ " only integers can be " ++ incdec ++ ", got '" ++ (show vtype) ++ "'"
 
 checkType :: TExpr -> PartialResult TType
 checkType expr = return $ Int (Just (0,0))
