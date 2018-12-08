@@ -10,8 +10,7 @@ import Frontend.AbsLatte
 
 type SPos = Maybe (Int, Int)
 type TType = Type SPos
-type Computation = (EndStatus, Env)
-data EndStatus = Running | MaybeEnded | Ended
+data ComputationStatus = Running | MaybeEnded | Ended
 
 
 type TArg = Arg (Maybe (Int, Int))
@@ -23,7 +22,8 @@ type TTopDef = TopDef (Maybe (Int, Int))
 type Loc = Int
 data Env = Env {
   vars :: Data.Map.Map Ident Loc,
-  usedNames :: Data.Set.Set Ident
+  usedNames :: Data.Set.Set Ident,
+  computationStatus :: ComputationStatus
 }
 
 type Store = Data.Map.Map Loc TType

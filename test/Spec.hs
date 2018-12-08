@@ -24,10 +24,10 @@ main = do
 
   putStrLn "------------------"
 
---   putStrLn "Testing correct programs"
---   goodDir <- return "test/good"
---   goodFilenames <- listDirectory goodDir
---   compileFiles $ [goodDir ++ "/" ++ fn | fn <- goodFilenames, ".lat" `isSuffixOf` fn]
+  putStrLn "Testing correct programs"
+  goodDir <- return "test/good"
+  goodFilenames <- listDirectory goodDir
+  compileFiles $ sort $  [goodDir ++ "/" ++ fn | fn <- goodFilenames, ".lat" `isSuffixOf` fn]
 
   putStrLn "------------------"
 

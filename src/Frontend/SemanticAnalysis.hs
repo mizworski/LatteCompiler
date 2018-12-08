@@ -12,7 +12,7 @@ import Control.Monad.Except
 semanticAnalysis :: TProgram -> TypeCheckResult ()
 semanticAnalysis program = do
   runReaderT (runStateT (semanticAnalysis' program) Data.Map.empty)
-             (Env {vars = Data.Map.empty, usedNames = Data.Set.empty})
+             (Env {vars = Data.Map.empty, usedNames = Data.Set.empty, computationStatus = Running})
   return ()
 
 
@@ -20,10 +20,6 @@ semanticAnalysis' :: TProgram -> PartialResult ()
 semanticAnalysis' (Program _ dfs) = do
   env <- checkFunctionSignatures dfs
   local (const env) $ checkFunctionsBody dfs
-  -- todo If/IfElse
-  -- todo While
-  -- todo non reachable / always reachable branches
-
   -- todo built in fns
   -- todo forbid using function names as variables (in blocks)
 --   return ()
@@ -31,37 +27,36 @@ semanticAnalysis' (Program _ dfs) = do
 checkFunctionsBody :: [TTopDef] -> PartialResult ()
 checkFunctionsBody [] = return()
 -- checkFunctionsBody ((FnDef pos retType _ args (Block _ [])):dfs) = throwError $ tokenPos pos ++ " empty function."
-checkFunctionsBody ((FnDef pos retType _ args (Block _ stmts)):dfs) = do
+checkFunctionsBody ((FnDef pos retType fname args (Block _ stmts)):dfs) = do
   env <- declareArguments args
-  local (const env) $ checkStatements pos retType stmts
-  checkFunctionsBody dfs
+  env' <- local (const env) $ checkStatements pos retType stmts
+  case (computationStatus env') of
+    Running -> do
+      case (retType == Void (Just (0,0))) of
+        True -> checkFunctionsBody dfs
+        otherwise -> throwError $ tokenPos pos ++ " function '" ++ (showVarName fname) ++ "' has no return"
+    otherwise -> checkFunctionsBody dfs
 
-checkStatements :: SPos -> TType -> [TStmt] -> PartialResult ()
-checkStatements pos _ [] = throwError $ tokenPos pos ++ " function has no return"
+checkStatements :: SPos -> TType -> [TStmt] -> PartialResult Env
+checkStatements pos _ [] = ask
 checkStatements pos retType (stmt:stmts) = do
-  res <- checkStatement stmt retType
-  case res of
-    (Just env) -> local (const env) $ checkStatements pos retType stmts
-    -- function returned
-    otherwise -> return ()
+  env <- checkStatement stmt retType
+  case (computationStatus env) of
+    Ended -> return env
+    otherwise -> local (const env) $ checkStatements pos retType stmts
 
-checkStatement :: TStmt -> TType ->  PartialResult (Maybe Env)
-checkStatement (Empty _) _ = do
-  env <- ask
-  return $ Just env
+checkStatement :: TStmt -> TType ->  PartialResult Env
+checkStatement (Empty _) _ = ask
 
 checkStatement (BStmt _ (Block bpos stmts)) retType = do
   env <- ask
   -- todo can override function name then
-  env' <- return $ Env {vars = vars env, usedNames = Data.Set.empty}
+  env' <- return $ Env {vars = vars env, usedNames = Data.Set.empty, computationStatus = computationStatus env}
   local (const env') $ checkStatements bpos retType stmts
-  return $ Just env
+  return env
 
 -- todo are items nonempty? [int;]
-checkStatement (Decl dpos dtype []) _ = do
-  env <- ask
-  return $ Just env
-
+checkStatement (Decl dpos dtype []) _ = ask
 checkStatement (Decl dpos dtype ((NoInit ipos ident):items)) rtype = do
   env <- ask
   case (Data.Set.member ident (usedNames env)) of
@@ -87,7 +82,7 @@ checkStatement (Ass apos ident expr) retType = do
       (Just loc) <- return $ Data.Map.lookup ident (vars env)
       (Just expectedType) <- return $ Data.Map.lookup loc state
       case (actualType == expectedType) of
-        True -> return $ Just env
+        True -> return env
         otherwise -> throwError $ tokenPos (getPos actualType) ++ " assigning expression of type '" ++ (show actualType)
                                                                ++ "' to variable of type '" ++ (show expectedType) ++ "'"
 
@@ -95,9 +90,10 @@ checkStatement (Incr pos ident) _ = checkIncDec pos ident "incremented"
 checkStatement (Decr pos ident) _ = checkIncDec pos ident "decremented"
 
 checkStatement (Ret _ expr) retType = do
+  env <- ask
   actualType <- checkType expr
   case (actualType == retType) of
-    True -> return Nothing
+    True -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = Ended}
     otherwise -> do
       case actualType of
         (Int pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Int' with expected '"
@@ -113,7 +109,9 @@ checkStatement (Ret _ expr) retType = do
 
 checkStatement (VRet _) retType = do
   case retType of
-    (Void _) -> return Nothing -- Nothing = Function returned
+    (Void _) -> do
+      env <- ask
+      return $ Env {vars = vars env, usedNames = usedNames env, computationStatus = Ended}
     (Int pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Void' with expected 'Int'"
     (Str pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Void' with expected 'Str'"
     (Bool pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Void' with expected 'Bool'"
@@ -123,19 +121,21 @@ checkStatement (VRet _) retType = do
 checkStatement (SExp _ expr) _ = do
   checkType expr
   env <- ask
-  return $ Just env
+  return env
 
 checkStatement (Cond pos bexpr ifTrueStmt) retType = do
   res <- checkBoolConstexpr bexpr pos
   case res of
     (Just False) -> do
       env <- ask
-      return $ Just env
+      return env
     (Just True) -> checkStatement ifTrueStmt retType
     otherwise -> do
-      checkStatement ifTrueStmt retType
       env <- ask
-      return $ Just env
+      env' <- checkStatement ifTrueStmt retType
+      case (computationStatus env) of
+        Running -> return env
+        otherwise -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
 
 checkStatement (CondElse pos bexpr ifTrueStmt ifFalseStmt) retType = do
   res <- checkBoolConstexpr bexpr pos
@@ -143,27 +143,47 @@ checkStatement (CondElse pos bexpr ifTrueStmt ifFalseStmt) retType = do
     (Just False) -> checkStatement ifFalseStmt retType
     (Just True) -> checkStatement ifTrueStmt retType
     otherwise -> do
-      resTrue <- checkStatement ifFalseStmt retType
-      case resTrue of
-        Nothing -> do
-          resFalse <- checkStatement ifTrueStmt retType
-          case resFalse of
-            Nothing -> return Nothing
-
-      env <- ask
-      return $ Just env
+      envTrue <- checkStatement ifTrueStmt retType
+      case (computationStatus envTrue) of
+        Running -> do
+          env <- ask
+          return env
+        Ended -> do
+          envFalse <- checkStatement ifFalseStmt retType
+          case (computationStatus envFalse) of
+            Running -> do
+              env <- ask
+              return env
+            otherwise -> do
+              env <- ask
+              return Env {vars = vars env, usedNames = usedNames env, computationStatus = computationStatus envFalse}
+        MaybeEnded -> do
+          envFalse <- checkStatement ifFalseStmt retType
+          case (computationStatus envFalse) of
+            Running -> do
+              env <- ask
+              return env
+            otherwise -> do
+              env <- ask
+              return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
 
 checkStatement (While pos bexpr loopBody) retType = do
   res <- checkBoolConstexpr bexpr pos
   case res of
     (Just False) -> do
       env <- ask
-      return $ Just env
+      return env
     -- for (Just False) case we don't need guaranteed return of body to avoid loop while True: i+=1; if i < 5: return;
+    (Just True) -> do
+      env <- checkStatement loopBody retType
+      case (computationStatus env) of
+        Running -> throwError $ tokenPos pos ++ " infinite loop"
+        otherwise -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
     otherwise -> do
-      checkStatement loopBody retType
-      env <- ask
-      return $ Just env
+      env <- checkStatement loopBody retType
+      case (computationStatus env) of
+        Running -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = Running}
+        otherwise -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
 
 -- checkStatement stmt retType = do
 --   env <- ask
@@ -180,7 +200,7 @@ checkBoolConstexpr expr pos = do
     otherwise -> throwError $ tokenPos pos ++ " 'if' condition must be boolean expression, got '"
                                            ++ (show exprType) ++ "'"
 
-checkIncDec :: SPos -> Ident -> String -> PartialResult (Maybe Env)
+checkIncDec :: SPos -> Ident -> String -> PartialResult Env
 checkIncDec pos ident incdec = do
   env <- ask
   case (Data.Map.member ident (vars env)) of
@@ -190,7 +210,7 @@ checkIncDec pos ident incdec = do
       (Just loc) <- return $ Data.Map.lookup ident (vars env)
       (Just vtype) <- return $ Data.Map.lookup loc state
       case vtype of
-        (Int _) -> return $ Just env
+        (Int _) -> return env
         otherwise -> throwError $ tokenPos pos ++ " only integers can be " ++ incdec ++ ", got '" ++ (show vtype) ++ "'"
 
 checkType :: TExpr -> PartialResult TType
@@ -368,7 +388,9 @@ declare varName varType = do
   env <- ask
   loc <- newloc
   modify $ Data.Map.insert loc varType
-  return $ Env {vars = Data.Map.insert varName loc (vars env), usedNames = Data.Set.insert varName (usedNames env)}
+  return $ Env { vars = Data.Map.insert varName loc (vars env)
+               , usedNames = Data.Set.insert varName (usedNames env)
+               , computationStatus = computationStatus env}
 
 
 newloc :: PartialResult Loc
