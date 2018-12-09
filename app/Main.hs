@@ -16,13 +16,12 @@ main = do
       program <- readFile filename
       case (pProgram $ myLexer program) of
         (Ok p) -> do
-          putStr $ unlines $ lines program
           typeCheckRes <- runExceptT $ semanticAnalysis p
           case typeCheckRes of
             (Left errMsg) -> do
               putStrLn $ filename ++ errMsg
             otherwise -> do
-              putStrLn $ show p
+              putStrLn "Semantic analysis passed."
               return()
         (Bad errMsg) -> do
           putStrLn $ filename ++ errMsg

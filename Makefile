@@ -16,9 +16,13 @@ clean-bnfc:
 	rm src/Frontend/ParLatte.y; \
 	rm src/Frontend/TestLatte.hs; \
 
-build:
+build-stack:
 	stack setup 8.2.2; \
 	stack build;
+
+build:
+	stack build
+	stack install --local-bin-path .
 
 clean:
 	stack clean; \

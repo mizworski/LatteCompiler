@@ -85,6 +85,7 @@ checkStatement (Ass apos ident expr) retType = do
       state <- get
       (Just loc) <- return $ Data.Map.lookup ident (vars env)
       (Just expectedType) <- return $ Data.Map.lookup loc state
+      -- todo prohibit actualType == void? checkType should never allow it anyway
       case (actualType == expectedType) of
         True -> return env
         otherwise -> throwError $ tokenPos (getPos actualType) ++ " assigning expression of type '" ++ (show actualType)

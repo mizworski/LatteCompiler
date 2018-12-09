@@ -29,7 +29,7 @@ library:
   source-dirs: src
 
 executables:
-  LatteCompiler-exe:
+  latc_x86_64:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
