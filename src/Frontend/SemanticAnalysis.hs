@@ -20,7 +20,6 @@ semanticAnalysis' (Program _ dfs) = do
   env <- declareBuiltInFns
   env' <- local (const env) $ checkFunctionSignatures dfs
   local (const env') $ checkFunctionsBody dfs
-  -- todo forbid using function names as variables (in blocks)
 
 checkFunctionsBody :: [TTopDef] -> PartialResult ()
 checkFunctionsBody [] = return()
@@ -47,20 +46,28 @@ checkStatement (Empty _) _ = ask
 
 checkStatement (BStmt _ (Block bpos stmts)) retType = do
   env <- ask
-  -- todo can override function name then
   env' <- return Env {vars = vars env, usedNames = Data.Set.empty, computationStatus = computationStatus env}
   env'' <- local (const env') $ checkStatements bpos retType stmts
   return Env {vars = vars env, usedNames = usedNames env, computationStatus = computationStatus env''}
 
--- todo are items nonempty? [int;]
 checkStatement (Decl dpos dtype []) _ = ask
 checkStatement (Decl dpos dtype ((NoInit ipos ident):items)) rtype = do
   env <- ask
   case (Data.Set.member ident (usedNames env)) of
     True -> throwError $ tokenPos ipos ++ " variable name already declared in this block"
     otherwise -> do
-      env' <- local (const env) $ declare ident dtype
-      local (const env') $ checkStatement (Decl dpos dtype items) rtype
+      case (Data.Map.lookup ident (vars env)) of
+        (Just loc) -> do
+          state <- get
+          (Just vtype) <- return $ Data.Map.lookup loc state
+          case vtype of
+            (Fun _ _ _) -> throwError $ tokenPos ipos ++ " name '" ++ (showVarName ident) ++ "' already in use"
+            otherwise -> do
+              env' <- local (const env) $ declare ident dtype
+              local (const env') $ checkStatement (Decl dpos dtype items) rtype
+        otherwise -> do
+          env' <- local (const env) $ declare ident dtype
+          local (const env') $ checkStatement (Decl dpos dtype items) rtype
 
 checkStatement (Decl dpos dtype ((Init ipos ident expr):items)) rtype = do
   actualType <- checkType expr
