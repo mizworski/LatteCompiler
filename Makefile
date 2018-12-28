@@ -4,6 +4,25 @@ install-deps:
 	cabal update; \
 	cabal install mtl
 
+mimuw:
+	wget https://www.stackage.org/stack/linux-x86_64-static -O stack.tgz
+	tar xvvf stack.tgz
+	mv stack-*/stack stack
+	rm -rf stack.tgz stack-*
+
+	./stack build
+	./stack install --local-bin-path .
+
+stack-mimuw:
+	wget https://www.stackage.org/stack/linux-x86_64-static -O stack.tgz
+	tar xvvf stack.tgz
+	mv stack-*/stack stack
+	rm -rf stack.tgz stack-*
+
+build-mimuw:
+	cabal build
+	cp ~/.cabal/bin/latc_x86_64 .
+
 build-bnfc:
 	stack build BNFC; \
 	cd src; \

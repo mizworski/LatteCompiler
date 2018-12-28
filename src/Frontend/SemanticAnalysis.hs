@@ -52,28 +52,34 @@ checkStatement (BStmt _ (Block bpos stmts)) retType = do
 
 checkStatement (Decl dpos dtype []) _ = ask
 checkStatement (Decl dpos dtype ((NoInit ipos ident):items)) rtype = do
-  env <- ask
-  case (Data.Set.member ident (usedNames env)) of
-    True -> throwError $ tokenPos ipos ++ " variable name already declared in this block"
+  case (dtype == Void (Just (0,0))) of
+    True -> throwError $ tokenPos ipos ++ " can't declare void type"
     otherwise -> do
-      case (Data.Map.lookup ident (vars env)) of
-        (Just loc) -> do
-          state <- get
-          (Just vtype) <- return $ Data.Map.lookup loc state
-          case vtype of
-            (Fun _ _ _) -> throwError $ tokenPos ipos ++ " name '" ++ (showVarName ident) ++ "' already in use"
+      env <- ask
+      case (Data.Set.member ident (usedNames env)) of
+        True -> throwError $ tokenPos ipos ++ " variable name already declared in this block"
+        otherwise -> do
+          case (Data.Map.lookup ident (vars env)) of
+            (Just loc) -> do
+              state <- get
+              (Just vtype) <- return $ Data.Map.lookup loc state
+              case vtype of
+                (Fun _ _ _) -> throwError $ tokenPos ipos ++ " name '" ++ (showVarName ident) ++ "' already in use"
+                otherwise -> do
+                  env' <- local (const env) $ declare ident dtype
+                  local (const env') $ checkStatement (Decl dpos dtype items) rtype
             otherwise -> do
               env' <- local (const env) $ declare ident dtype
               local (const env') $ checkStatement (Decl dpos dtype items) rtype
-        otherwise -> do
-          env' <- local (const env) $ declare ident dtype
-          local (const env') $ checkStatement (Decl dpos dtype items) rtype
 
 checkStatement (Decl dpos dtype ((Init ipos ident expr):items)) rtype = do
-  actualType <- checkType expr
-  case (actualType == dtype) of
-    True -> checkStatement (Decl dpos dtype ((NoInit ipos ident):items)) rtype
-    otherwise -> throwError $ tokenPos (getPos actualType) ++ " couldn't match actual type '" ++ (show actualType)
+  case (dtype == Void (Just (0,0))) of
+    True -> throwError $ tokenPos ipos ++ " can't declare void type"
+    otherwise -> do
+      actualType <- checkType expr
+      case (actualType == dtype) of
+        True -> checkStatement (Decl dpos dtype ((NoInit ipos ident):items)) rtype
+        otherwise -> throwError $ tokenPos (getPos actualType) ++ " couldn't match actual type '" ++ (show actualType)
                                                            ++ "' with expected '" ++ (show dtype) ++ "'"
 
 checkStatement (Ass apos ident expr) retType = do
@@ -85,7 +91,7 @@ checkStatement (Ass apos ident expr) retType = do
       state <- get
       (Just loc) <- return $ Data.Map.lookup ident (vars env)
       (Just expectedType) <- return $ Data.Map.lookup loc state
-      -- todo prohibit actualType == void? checkType should never allow it anyway
+      -- todo prohibit actualType == void? checkType should never allow it anyway 
       case (actualType == expectedType) of
         True -> return env
         otherwise -> throwError $ tokenPos (getPos actualType) ++ " assigning expression of type '" ++ (show actualType)
@@ -110,7 +116,7 @@ checkStatement (Ret _ expr) retType = do
         (Fun pos rtype atypes) -> throwError $ tokenPos pos ++ " couldn't match actual type '"
                                                             ++ (show $ Fun pos rtype atypes)
                                                             ++"' with expected '" ++ (show retType) ++ "'"
-        -- not checking void type as checkType should never return void type
+        (Void pos) -> throwError $ tokenPos pos ++ " trying to return expression with void type"
 
 checkStatement (VRet _) retType = do
   case retType of
@@ -128,53 +134,60 @@ checkStatement (SExp _ expr) _ = do
   ask
 
 checkStatement (Cond pos bexpr ifTrueStmt) retType = do
+  env <- ask
   res <- checkBoolConstexpr bexpr pos
   case res of
-    (Just False) -> ask
-    (Just True) -> checkStatement ifTrueStmt retType
+    (Just False) -> return env
+    (Just True) -> do
+      env' <- local (const env) $ checkStatement ifTrueStmt retType
+      return Env {vars = vars env, usedNames = usedNames env, computationStatus = computationStatus env'}
     otherwise -> do
-      env <- ask
-      env' <- checkStatement ifTrueStmt retType
+      env' <- local (const env) $ checkStatement ifTrueStmt retType
       case (computationStatus env) of
         Running -> return env
         otherwise -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
 
 checkStatement (CondElse pos bexpr ifTrueStmt ifFalseStmt) retType = do
+  env <- ask
   res <- checkBoolConstexpr bexpr pos
   case res of
-    (Just False) -> checkStatement ifFalseStmt retType
-    (Just True) -> checkStatement ifTrueStmt retType
+    (Just False) -> do
+      env' <- local (const env) $ checkStatement ifFalseStmt retType
+      return Env {vars = vars env, usedNames = usedNames env, computationStatus = computationStatus env'}
+    (Just True) -> do
+      env' <- local (const env) $ checkStatement ifTrueStmt retType
+      return Env {vars = vars env, usedNames = usedNames env, computationStatus = computationStatus env'}
     otherwise -> do
-      envTrue <- checkStatement ifTrueStmt retType
+      envTrue <- local (const env) $ checkStatement ifTrueStmt retType
+      envFalse <- local (const env) $ checkStatement ifFalseStmt retType
       case (computationStatus envTrue) of
-        Running -> ask
-        Ended -> do
-          envFalse <- checkStatement ifFalseStmt retType
+        Running -> do
           case (computationStatus envFalse) of
-            Running -> ask
+            Running -> return env
             otherwise -> do
-              env <- ask
-              return Env {vars = vars env, usedNames = usedNames env, computationStatus = computationStatus envFalse}
-        MaybeEnded -> do
-          envFalse <- checkStatement ifFalseStmt retType
-          case (computationStatus envFalse) of
-            Running -> ask
-            otherwise -> do
-              env <- ask
               return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
+        Ended -> do
+          case (computationStatus envFalse) of
+            Ended -> do
+              return Env {vars = vars env, usedNames = usedNames env, computationStatus = Ended}
+            otherwise -> do
+              return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
+        MaybeEnded -> do
+          return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
 
 checkStatement (While pos bexpr loopBody) retType = do
+  env <- ask
   res <- checkBoolConstexpr bexpr pos
   case res of
-    (Just False) -> ask
+    (Just False) -> return env
     (Just True) -> do
-      env <- checkStatement loopBody retType
-      case (computationStatus env) of
+      env' <- local (const env) $ checkStatement loopBody retType
+      case (computationStatus env') of
         Running -> throwError $ tokenPos pos ++ " infinite loop"
         otherwise -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
     otherwise -> do
-      env <- checkStatement loopBody retType
-      case (computationStatus env) of
+      env' <- checkStatement loopBody retType
+      case (computationStatus env') of
         Running -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = Running}
         otherwise -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
 
@@ -225,7 +238,7 @@ checkType (EApp pos ident args) = do
       state <- get
       (Just loc) <- return $ Data.Map.lookup ident (vars env)
       (Just (Fun _ retType argTypes)) <- return $ Data.Map.lookup loc state
-      checkArgs args argTypes pos
+      checkParametersPassed args argTypes ident pos
       return $ changePos retType pos
 
 checkType (EString pos _) = return $ Str pos
@@ -267,7 +280,7 @@ checkType (EAdd pos expr1 op expr2) = do
 checkType (ERel pos expr1 op expr2) = do
   actualType <- checkType expr1
   case op of
-    -- todo how to simplify this copypasta?
+    -- todo how to simplify this copy-paste?
     (GE _) -> do
       case actualType of
         (Int _) -> do
@@ -364,7 +377,7 @@ checkFunctionSignatures ((FnDef pos retType fname args _):dfs) = do
   case (Data.Map.lookup fname (vars env)) of
     Nothing -> do
       argTypes <- return $ getArgTypes args
-      checkArgNames args
+      checkArgsDefinition args
       ftype <- return $ Fun pos retType argTypes
       env' <- declare fname ftype
       local (const env') $ checkFunctionSignatures dfs
@@ -404,23 +417,28 @@ getArgTypes args = reverse $ getArgTypes' args [] where
   getArgTypes' [] acc = acc
   getArgTypes' ((Arg _ argType _):args) acc = getArgTypes' args (argType:acc)
 
-checkArgNames :: [TArg] -> PartialResult Env
-checkArgNames args = checkArgNames' args Data.Set.empty
+checkArgsDefinition :: [TArg] -> PartialResult Env
+checkArgsDefinition args = checkArgsDefinition' args Data.Set.empty
 
-checkArgNames' :: [TArg] -> (Data.Set.Set String) -> PartialResult Env
-checkArgNames' [] _ = ask
-checkArgNames' ((Arg pos _ (Ident name)):args) names
+checkArgsDefinition' :: [TArg] -> (Data.Set.Set String) -> PartialResult Env
+checkArgsDefinition' [] _ = ask
+checkArgsDefinition' ((Arg pos atype (Ident name)):args) names
   | Data.Set.member name names = throwError $ tokenPos pos ++ " repeated argument name '" ++ name ++ "'"
-  | otherwise = checkArgNames' args (Data.Set.insert name names)
+  | otherwise = do
+    case (atype == Void (Just (0,0))) of
+      True -> throwError $ tokenPos pos ++ " argument '" ++ name ++ "' can't be void"
+      otherwise -> checkArgsDefinition' args (Data.Set.insert name names)
 
-checkArgs :: [TExpr] -> [TType] -> SPos -> PartialResult Env
-checkArgs [] [] _ = ask
-checkArgs [] _ pos = throwError $ tokenPos pos ++ " not enough arguments passed to function"
-checkArgs _ [] pos = throwError $ tokenPos pos ++ " too many arguments passed to function"
-checkArgs (expr:exprs) (expectedType:argTypes) pos = do
+checkParametersPassed :: [TExpr] -> [TType] -> Ident -> SPos -> PartialResult Env
+checkParametersPassed [] [] _ _ = ask
+checkParametersPassed [] _ ident pos = throwError $ tokenPos pos ++ " not enough arguments passed to function '"
+                                                    ++ (showVarName ident) ++ "'"
+checkParametersPassed _ [] ident pos = throwError $ tokenPos pos ++ " too many arguments passed to function '"
+                                                    ++ (showVarName ident) ++ "'"
+checkParametersPassed (expr:exprs) (expectedType:argTypes) ident pos = do
   actualType <- checkType expr
   case (actualType == expectedType) of
-    True -> checkArgs exprs argTypes pos
+    True -> checkParametersPassed exprs argTypes ident pos
     otherwise -> throwError $ tokenPos (getPos actualType) ++ " couldn't match actual type '" ++ (show actualType)
                                                            ++ "' with expected '" ++ (show expectedType) ++ "'"
 

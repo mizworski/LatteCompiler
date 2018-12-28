@@ -2,6 +2,8 @@ module Main where
 
 import Control.Monad.Except
 import System.Environment
+import System.Exit
+import System.IO
 
 import Frontend.ErrM
 import Frontend.ParLatte
@@ -19,11 +21,15 @@ main = do
           typeCheckRes <- runExceptT $ semanticAnalysis p
           case typeCheckRes of
             (Left errMsg) -> do
-              putStrLn $ filename ++ errMsg
+              hPutStrLn stderr "ERROR"
+              hPutStrLn stderr $ filename ++ errMsg
+              exitWith (ExitFailure 42)
             otherwise -> do
+              hPutStrLn stderr "OK"
               putStrLn "Semantic analysis passed."
-              return()
+              exitWith ExitSuccess
         (Bad errMsg) -> do
           putStrLn $ filename ++ errMsg
     _ -> do
-      putStrLn "Wrong number of arguments"
+      hPutStrLn stderr $ "Wrong number of arguments passed to compiler."
+      exitWith (ExitFailure 42)
