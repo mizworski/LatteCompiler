@@ -22,3 +22,5 @@ zakończyć.
 Dla IfElse, jeżeli obydwa bloki się kończą (status Ended), to całość się kończy. Jeżeli chociaż jeden blok może się 
 zakończyć (status Ended lub MaybeEnded), to dana instrukcja może się zakończyć. W przeciwnym wypadku 
 (jeżel żaden blok się nie kończy, status Running), to dany ifelse ma status running.
+
+Zakładam że plik wejściowy ma roszerzenie .ins, inaczej błąd.

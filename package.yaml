@@ -24,6 +24,8 @@ dependencies:
 - containers
 - array
 - mtl
+- filepath
+- process
 
 library:
   source-dirs: src
