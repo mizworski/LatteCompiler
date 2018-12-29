@@ -10,12 +10,18 @@ import Frontend.AbsLatte
 
 emitProgram :: TProgram -> Result StateLLVM String
 emitProgram (Program _ stmts) = do
---   program <- return $ unlines ["define i32 @main() {", "ret i32 0", "}", ""]
---   functionDefs <- return [program]
+  predefinedFns <- emitPredefinedFnDecls
   functionDefs <- sequence $ map emitFunction stmts
-  return $ unlines functionDefs
+  return $ unlines $ predefinedFns ++ [""] ++ functionDefs
 
--- emitFunction :: TTopDef -> Result StateLLVM String
+emitPredefinedFnDecls :: Result StateLLVM [String]
+emitPredefinedFnDecls =
+  return $ ["declare void @printInt(i32)",
+            "declare void @printString(i8*)",
+            "declare i32 @readInt()",
+            "declare i8* @readString()",
+            "declare void @error()"]
+
 emitFunction :: TTopDef -> Result StateLLVM String
 emitFunction (FnDef _ rtype (Ident fname) args body) = do
   header <- emitHeader rtype fname args
@@ -52,4 +58,3 @@ llvmType (Str _) = "i8*"
 llvmType (Bool _) = "i1"
 llvmType (Void _) = "void"
 llvmType _ = "**err**"
--- llvmType (Void _) = "void"
