@@ -23,3 +23,4 @@ type TStmt = Stmt SPos
 type TExpr = Expr SPos
 type TProgram = Program SPos
 type TTopDef = TopDef SPos
+type TBlock = Block SPos

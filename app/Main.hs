@@ -31,7 +31,7 @@ compileToLLVM inputFilename outputFilename = do
           -- semantic analysis passed
           hPutStrLn stderr "OK"
 --           ir <- middleEnd ir
-          (llvmCode, _) <- runStateT (irToCode ir) initialState
+          (llvmCode, _) <- runStateT (emitProgram ir) initialState
           writeFile outputFilename llvmCode
           return ()
     (Bad errMsg) -> do
