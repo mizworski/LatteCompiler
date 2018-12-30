@@ -32,10 +32,17 @@ emitFunction (FnDef _ rtype (Ident fname) args body) = do
   put $ StateLLVM 0 (globalVarsDefs state) (varsStore state)
   header <- emitHeader rtype fname args
   entry <- emitEntry args
-  bodyInstrs <- emitBlock body
-  body <- return $ ["    " ++ instr | instr <- bodyInstrs]
-  footer <- return ["}"]
-  return $ unlines $ header ++ entry ++ body ++ footer
+  (status, _, bodyInstrs) <- emitBlock body
+  case status of
+    Running -> do
+      bodyInstrs <- return $ bodyInstrs ++ ["ret void"]
+      body <- return $ ["    " ++ instr | instr <- bodyInstrs]
+      footer <- return ["}"]
+      return $ unlines $ header ++ entry ++ body ++ footer
+    Terminated -> do
+      body <- return $ ["    " ++ instr | instr <- bodyInstrs]
+      footer <- return ["}"]
+      return $ unlines $ header ++ entry ++ body ++ footer
 
 emitHeader :: TType -> String -> [TArg] -> Result Instructions
 emitHeader rtype fname args =
@@ -44,24 +51,78 @@ emitHeader rtype fname args =
 emitEntry :: [TArg] -> Result Instructions
 emitEntry args = return ["entry:"]
 
-emitBlock :: TBlock -> Result Instructions
-emitBlock (Block _ []) = return []
+emitBlock :: TBlock -> Result (TStatus, Env, Instructions)
+emitBlock (Block _ []) = do
+  env <- ask
+  return (Running, env, [])
 emitBlock (Block pos (stmt:stmts)) = do
-  stmtCode <- emitStmt stmt
-  stmtsCode <- emitBlock (Block pos stmts)
-  return $ stmtCode ++ stmtsCode
+  env <- ask
+  (status, env', stmtCode) <- emitStmt stmt
+  case status of
+    Terminated -> return (Terminated, env', stmtCode)
+    Running -> do
+      (status', _, stmtsCode) <- local (const env') $ emitBlock (Block pos stmts)
+      return $ (status', env, stmtCode ++ stmtsCode)
 
-emitStmt :: TStmt -> Result Instructions
-emitStmt (Empty _) = return []
-emitStmt (BStmt _ block) = emitBlock block
+emitStmt :: TStmt -> Result (TStatus, Env, Instructions)
+emitStmt (Empty _) = do
+  env <- ask
+  return (Running, env, [])
+emitStmt (BStmt _ block) = do
+  env <- ask
+  (status, _, instrs) <- emitBlock block
+  return (status, env, instrs)
 emitStmt (SExp _ expr) = do
   (instructions, _, _) <- emitExpr expr
-  return instructions
+  env <- ask
+  return (Running, env, instructions)
 emitStmt (Ret _ expr) = do
+  env <- ask
   (instructions, rtype, res) <- emitExpr expr
-  return $ instructions ++ ["ret " ++ (llvmType rtype) ++ " " ++ res]
-emitStmt (VRet _) = return ["ret void"]
-emitStmt _ = return []
+  return (Terminated, env, instructions ++ ["ret " ++ (llvmType rtype) ++ " " ++ res])
+emitStmt (VRet _) = do
+  env <- ask
+  return (Terminated, env, ["ret void"])
+emitStmt (Cond _ bexpr ifTrueStmt) = do
+  env <- ask
+  case (simplifyConstExpr bexpr) of
+    (Just False) -> return (Running, env, [])
+    (Just True) -> do
+      (status, _, instrs) <- emitStmt ifTrueStmt
+      return (status, env, instrs)
+    Nothing -> do
+      condLabelReg <- getNextRegister
+      condLabel <- return $ ".if.cond." ++ (show condLabelReg) ++ ":"
+      (condInstrs, _, condReg) <- emitExpr bexpr
+
+      ifTrueLabelReg <- getNextRegister
+      ifTrueLabel <- return $ "if.true." ++ (show ifTrueLabelReg)
+      (_, _, ifTrueInstrs) <- emitStmt ifTrueStmt
+      afterCondReg <- getNextRegister
+      afterCondLabel <- return $ ".after.cond." ++ (show afterCondReg) ++ ":"
+      jmpAfterStmt <- return $ ["br label %" ++ (init afterCondLabel)]
+      jmpInstr <- return ["br i1 " ++ condReg ++ ", label %" ++ (init ifTrueLabel) ++
+                          ", label %" ++ (init afterCondLabel)]
+      instrs <- return $ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++ jmpAfterStmt ++
+                         [afterCondLabel]
+      return (Running, env, instrs)
+emitStmt (CondElse _ bexpr ifTrueStmt ifFalseStmt) = do
+  env <- ask
+  case (simplifyConstExpr bexpr) of
+    (Just False) -> do
+      (status, _, instrs) <- emitStmt ifFalseStmt
+      return (status, env, instrs)
+    (Just True) -> do
+      (status, _, instrs) <- emitStmt ifTrueStmt
+      return (status, env, instrs)
+    Nothing -> do
+      return (Running, env, [])
+
+
+emitStmt _ = do
+  env <- ask
+  return (Running, env, [])
+
 
 emitExpr :: TExpr -> Result (Instructions, TType, Register)
 emitExpr (ELitInt _ num) = return ([], Int (Just (0,0)), show num)
@@ -91,7 +152,7 @@ emitExpr (EApp _ (Ident fname) exprs) = do
       instrs' <- return $ instrs ++ fnCallInstr
       return (foldr (++) [] instrs', Int (Just (0, 0)), "%" ++ (show register))
 
-  
+
 emitExpr _ = return ([], Int (Just (0, 0)), "%0")
 
 emitArguments :: [TArg] -> String
@@ -125,8 +186,7 @@ getVarType vname = do
 
 putFnTypes :: [TTopDef] -> Result Env
 putFnTypes [] = do
-  env <- ask
-  env' <- local (const env) $ putFn (Ident "printInt") (Void (Just (0, 0)))
+  env' <- putFn (Ident "printInt") (Void (Just (0, 0)))
   env'' <- local (const env') $ putFn (Ident "printString") (Void (Just (0, 0)))
   env''' <- local (const env'') $ putFn (Ident "error") (Void (Just (0, 0)))
   env'''' <- local (const env''') $ putFn (Ident "readInt") (Int (Just (0, 0)))
@@ -134,8 +194,7 @@ putFnTypes [] = do
   return env'''''
 
 putFnTypes ((FnDef _ rtype fname _ _):stmts) = do
-  env <- ask
-  env' <- local (const env) $ putFn fname rtype
+  env' <- putFn fname rtype
   local (const env') $ putFnTypes stmts
 
 putFn :: Ident -> TType -> Result Env
@@ -158,4 +217,9 @@ llvmType (Int _) = "i32"
 llvmType (Str _) = "i8*"
 llvmType (Bool _) = "i1"
 llvmType (Void _) = "void"
-llvmType _ = "**err**"
+-- llvmType _ = "**err**"
+
+simplifyConstExpr :: TExpr -> Maybe Bool
+simplifyConstExpr (ELitTrue _) = Just True
+simplifyConstExpr (ELitFalse _) = Just False
+simplifyConstExpr _ = Nothing

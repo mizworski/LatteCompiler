@@ -21,6 +21,7 @@ data StateLLVM = StateLLVM {
 initialState = StateLLVM 1 [] Data.Map.empty
 
 type Result a = StateT StateLLVM (ReaderT Env (ExceptT String IO)) a
+data TStatus = Running | Terminated
 
 type Instructions = [String]
 type Register = String
