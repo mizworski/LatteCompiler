@@ -1,7 +1,9 @@
 module Main where
 
 import Control.Monad.Except
+import Control.Monad.Reader
 import Control.Monad.State
+import qualified Data.Map
 import System.Environment
 import System.Exit
 import System.FilePath.Posix
@@ -32,10 +34,16 @@ compileToLLVM inputFilename outputFilename = do
           hPutStrLn stderr "OK"
 --           ir <- middleEnd ir
           putStrLn $ show ir
-          (llvmCode, _) <- runStateT (emitProgram ir) initialState
-          putStrLn llvmCode
-          writeFile outputFilename llvmCode
-          return ()
+          maybeRes <- runExceptT $ runReaderT (runStateT (emitProgram ir) initialState) Data.Map.empty
+          case maybeRes of
+            (Left errMsg) -> do
+              hPutStrLn stderr "COMPILER INTERNAL ERROR"
+              hPutStrLn stderr $ errMsg
+              exitWith (ExitFailure 42)
+            (Right (llvmCode, _)) -> do
+              putStrLn llvmCode
+              writeFile outputFilename llvmCode
+              return ()
     (Bad errMsg) -> do
       -- parser error
       putStrLn $ inputFilename ++ errMsg

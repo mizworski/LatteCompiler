@@ -1,21 +1,27 @@
 module Backend.Datatypes where
 
+import Control.Monad.Except
+import Control.Monad.Reader
 import Control.Monad.State
+
 import qualified Data.Set
 import qualified Data.Map
 
 import Frontend.AbsLatte
 
 
+type Loc = Int
+type Env = Data.Map.Map Ident Loc
 data StateLLVM = StateLLVM {
   nextRegister :: Integer,
-  fnRtypes :: Data.Map.Map String TType,
-  globalVarsDefs :: [String]
+  globalVarsDefs :: [String],
+  varsStore :: Data.Map.Map Loc (TType, Register)
 } deriving (Show)
 
-initialState = StateLLVM 1 Data.Map.empty []
+initialState = StateLLVM 1 [] Data.Map.empty
 
-type Result a = StateT StateLLVM IO a
+type Result a = StateT StateLLVM (ReaderT Env (ExceptT String IO)) a
+
 type Instructions = [String]
 type Register = String
 

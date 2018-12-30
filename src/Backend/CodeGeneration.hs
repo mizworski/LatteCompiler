@@ -1,6 +1,7 @@
 module Backend.CodeGeneration where
 
 import Control.Monad.Except
+import Control.Monad.Reader
 import Control.Monad.State
 import Data.List
 import qualified Data.Map
@@ -11,9 +12,9 @@ import Frontend.AbsLatte
 
 emitProgram :: TProgram -> Result String
 emitProgram (Program _ stmts) = do
-  putRtypes stmts
-  predefinedFns <- emitPredefinedFnDecls
-  functionDefs <- mapM emitFunction stmts
+  env' <- putFnTypes stmts
+  predefinedFns <- local (const env') $ emitPredefinedFnDecls
+  functionDefs <- local (const env') $ mapM emitFunction stmts
   state <- get
   return $ unlines $ predefinedFns ++ [""] ++ (globalVarsDefs state) ++ [""] ++ functionDefs
 
@@ -28,7 +29,7 @@ emitPredefinedFnDecls =
 emitFunction :: TTopDef -> Result String
 emitFunction (FnDef _ rtype (Ident fname) args body) = do
   state <- get
-  put $ StateLLVM 0 (fnRtypes state) (globalVarsDefs state)
+  put $ StateLLVM 0 (globalVarsDefs state) (varsStore state)
   header <- emitHeader rtype fname args
   entry <- emitEntry args
   bodyInstrs <- emitBlock body
@@ -69,7 +70,7 @@ emitExpr (EString _ str) = do
   state <- get
   globalVarDef <- return $ "@str" ++ (show reg) ++ " = internal constant ["
                             ++ (show $ (length str) - 1) ++ " x i8] c\"" ++ (tail $ init str) ++ "\\00\""
-  put $ StateLLVM (nextRegister state) (fnRtypes state) (globalVarDef : (globalVarsDefs state))
+  put $ StateLLVM (nextRegister state) (globalVarDef : (globalVarsDefs state)) (varsStore state)
   instr <- return $ "%" ++ (show reg) ++ " = getelementptr [" ++ (show $ (length str) - 1) ++ " x i8], " ++
                     "[" ++ (show $ (length str) - 1) ++ " x i8]* @str" ++ (show reg) ++ ", i32 0, i32 0"
   return ([instr], Str (Just (0, 0)), "%" ++ (show reg))
@@ -77,20 +78,18 @@ emitExpr (EApp _ (Ident fname) exprs) = do
   state <- get
   exprsRes <- mapM emitExpr exprs
   (instrs, ptypes, pregs) <- return $ unzip3 exprsRes
-  case (Data.Map.lookup fname (fnRtypes state)) of
-    (Just rtype) -> do
-      fnCall <- return $ "call " ++ (llvmType rtype) ++ " @" ++ fname ++ "(" ++ (emitParameters ptypes pregs) ++ ")"
-      case (rtype == (Void (Just (0,0)))) of
-        True -> do
-          fnCallInstr <- return [[fnCall]]
-          instrs' <- return $ instrs ++ fnCallInstr
-          return (foldr (++) [] instrs', Int (Just (0, 0)), "%-1")
-        False -> do
-          register <- getNextRegister
-          fnCallInstr <- return $ [["%" ++ (show register) ++ " = " ++ fnCall]]
-          instrs' <- return $ instrs ++ fnCallInstr
-          return (foldr (++) [] instrs', Int (Just (0, 0)), "%" ++ (show register))
-    Nothing -> return ([], Int (Just (0, 0)), "%0") --todo error
+  rtype <- getVarType (Ident fname)
+  fnCall <- return $ "call " ++ (llvmType rtype) ++ " @" ++ fname ++ "(" ++ (emitParameters ptypes pregs) ++ ")"
+  case (rtype == (Void (Just (0,0)))) of
+    True -> do
+      fnCallInstr <- return [[fnCall]]
+      instrs' <- return $ instrs ++ fnCallInstr
+      return (foldr (++) [] instrs', Int (Just (0, 0)), "%-1")
+    False -> do
+      register <- getNextRegister
+      fnCallInstr <- return $ [["%" ++ (show register) ++ " = " ++ fnCall]]
+      instrs' <- return $ instrs ++ fnCallInstr
+      return (foldr (++) [] instrs', Int (Just (0, 0)), "%" ++ (show register))
 
   
 emitExpr _ = return ([], Int (Just (0, 0)), "%0")
@@ -109,32 +108,50 @@ getNextRegister :: Result Integer
 getNextRegister = do
   state <- get
   nextReg <- return $ nextRegister state
-  put $ StateLLVM (nextReg + 1) (fnRtypes state) (globalVarsDefs state)
+  put $ StateLLVM (nextReg + 1) (globalVarsDefs state) (varsStore state)
   return nextReg
 
-getRtype :: String -> Result TType
-getRtype fname = do
-  state <- get
-  case (Data.Map.lookup fname (fnRtypes state)) of
-    (Just rtype) -> return rtype
-    Nothing -> do
-      return (Void (Just (0,0))) --todo error
+getVarType:: Ident -> Result TType
+getVarType vname = do
+  env <- ask
+  maybeLoc <- return $ Data.Map.lookup vname env
+  case maybeLoc of
+    (Just loc) -> do
+      state <- get
+      case (Data.Map.lookup loc (varsStore state)) of
+        (Just (rtype, _)) -> return rtype
+        Nothing -> throwError "Value under loc was not found in store"
+    Nothing -> throwError "Loc not found for variable"
 
-putRtypes :: [TTopDef] -> Result ()
-putRtypes [] = do
-  state <- get
-  newRtypes <- return $ Data.Map.insert "printInt" (Void (Just (0,0))) (fnRtypes state)
-  newRtypes' <- return $ Data.Map.insert "printString" (Void (Just (0,0))) newRtypes
-  newRtypes'' <- return $ Data.Map.insert "error" (Void (Just (0,0))) newRtypes'
-  newRtypes''' <- return $ Data.Map.insert "readInt" (Int (Just (0,0))) newRtypes''
-  newRtypes'''' <- return $ Data.Map.insert "readString" (Str (Just (0,0))) newRtypes'''
-  put $ StateLLVM (nextRegister state) newRtypes'''' (globalVarsDefs state)
+putFnTypes :: [TTopDef] -> Result Env
+putFnTypes [] = do
+  env <- ask
+  env' <- local (const env) $ putFn (Ident "printInt") (Void (Just (0, 0)))
+  env'' <- local (const env') $ putFn (Ident "printString") (Void (Just (0, 0)))
+  env''' <- local (const env'') $ putFn (Ident "error") (Void (Just (0, 0)))
+  env'''' <- local (const env''') $ putFn (Ident "readInt") (Int (Just (0, 0)))
+  env''''' <- local (const env'''') $ putFn (Ident "readString") (Str (Just (0, 0)))
+  return env'''''
 
-putRtypes ((FnDef _ rtype (Ident fname) _ _):stmts) = do
+putFnTypes ((FnDef _ rtype fname _ _):stmts) = do
+  env <- ask
+  env' <- local (const env) $ putFn fname rtype
+  local (const env') $ putFnTypes stmts
+
+putFn :: Ident -> TType -> Result Env
+putFn fname fnRtype = do
+  env <- ask
+  loc <- newloc
+  env' <- return $ Data.Map.insert fname loc env
   state <- get
-  newRtypes <- return $ Data.Map.insert fname rtype (fnRtypes state)
-  put $ StateLLVM (nextRegister state) newRtypes (globalVarsDefs state)
-  putRtypes stmts
+  newstore <- return $ Data.Map.insert loc (fnRtype, "$$$") (varsStore state) -- todo $$$
+  put $ StateLLVM (nextRegister state) (globalVarsDefs state) newstore
+  return env'
+
+newloc :: Result Loc
+newloc = do
+  state <- get
+  return $ Data.Map.size (varsStore state)
 
 llvmType :: TType -> String
 llvmType (Int _) = "i32"
