@@ -36,11 +36,11 @@ emitFunction (FnDef _ rtype (Ident fname) args body) = do
   case status of
     Running -> do
       bodyInstrs <- return $ bodyInstrs ++ ["ret void"]
-      body <- return $ ["    " ++ instr | instr <- bodyInstrs]
+      body <- return $ [if "." `isPrefixOf` instr then instr else "    " ++ instr | instr <- bodyInstrs]
       footer <- return ["}"]
       return $ unlines $ header ++ entry ++ body ++ footer
     Terminated -> do
-      body <- return $ ["    " ++ instr | instr <- bodyInstrs]
+      body <- return $ [if "." `isPrefixOf` instr then instr else "    " ++ instr | instr <- bodyInstrs]
       footer <- return ["}"]
       return $ unlines $ header ++ entry ++ body ++ footer
 
@@ -49,7 +49,8 @@ emitHeader rtype fname args =
   return ["define " ++ (llvmType rtype) ++ " @" ++ fname ++ "(" ++ (emitArguments args) ++ ") {"]
 
 emitEntry :: [TArg] -> Result Instructions
-emitEntry args = return ["entry:"]
+-- emitEntry args = return ["entry:"]
+emitEntry args = return []
 
 emitBlock :: TBlock -> Result (TStatus, Env, Instructions)
 emitBlock (Block _ []) = do
@@ -96,7 +97,7 @@ emitStmt (Cond _ bexpr ifTrueStmt) = do
       (condInstrs, _, condReg) <- emitExpr bexpr
 
       ifTrueLabelReg <- getNextRegister
-      ifTrueLabel <- return $ "if.true." ++ (show ifTrueLabelReg)
+      ifTrueLabel <- return $ ".if.true." ++ (show ifTrueLabelReg) ++ ":"
       (_, _, ifTrueInstrs) <- emitStmt ifTrueStmt
       afterCondReg <- getNextRegister
       afterCondLabel <- return $ ".after.cond." ++ (show afterCondReg) ++ ":"
@@ -116,7 +117,28 @@ emitStmt (CondElse _ bexpr ifTrueStmt ifFalseStmt) = do
       (status, _, instrs) <- emitStmt ifTrueStmt
       return (status, env, instrs)
     Nothing -> do
-      return (Running, env, [])
+      condLabelReg <- getNextRegister
+      condLabel <- return $ ".if.cond." ++ (show condLabelReg) ++ ":"
+      (condInstrs, _, condReg) <- emitExpr bexpr
+
+      ifTrueLabelReg <- getNextRegister
+      ifTrueLabel <- return $ ".if.true." ++ (show ifTrueLabelReg) ++ ":"
+      (ifTrueStatus, _, ifTrueInstrs) <- emitStmt ifTrueStmt
+      ifFalseLabelReg <- getNextRegister
+      ifFalseLabel <- return $ ".if.false." ++ (show ifFalseLabelReg) ++ ":"
+      (ifFalseStatus, _, ifFalseInstrs) <- emitStmt ifFalseStmt
+
+      afterCondReg <- getNextRegister
+      afterCondLabel <- return $ ".after.cond." ++ (show afterCondReg) ++ ":"
+      jmpAfterStmt <- return $ ["br label %" ++ (init afterCondLabel)]
+      jmpInstr <- return ["br i1 " ++ condReg ++ ", label %" ++ (init ifTrueLabel) ++
+                          ", label %" ++ (init ifFalseLabel)]
+      instrs <- return $ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++ jmpAfterStmt ++
+                          [ifFalseLabel] ++ ifFalseInstrs ++ jmpAfterStmt ++ [afterCondLabel]
+      if (ifTrueStatus == Terminated && ifFalseStatus == Terminated) then
+        return (Terminated, env, instrs)
+      else
+        return (Running, env, instrs)
 
 
 emitStmt _ = do
@@ -129,6 +151,7 @@ emitExpr (ELitInt _ num) = return ([], Int (Just (0,0)), show num)
 emitExpr (EString _ str) = do
   reg <- getNextRegister
   state <- get
+  -- todo add fnName to str def as registers starts from 0 for each fn
   globalVarDef <- return $ "@str" ++ (show reg) ++ " = internal constant ["
                             ++ (show $ (length str) - 1) ++ " x i8] c\"" ++ (tail $ init str) ++ "\\00\""
   put $ StateLLVM (nextRegister state) (globalVarDef : (globalVarsDefs state)) (varsStore state)
@@ -153,7 +176,7 @@ emitExpr (EApp _ (Ident fname) exprs) = do
       return (foldr (++) [] instrs', Int (Just (0, 0)), "%" ++ (show register))
 
 
-emitExpr _ = return ([], Int (Just (0, 0)), "%0")
+emitExpr _ = return ([], Int (Just (0, 0)), "0")
 
 emitArguments :: [TArg] -> String
 emitArguments args = intercalate ", " (emitArguments' args) where
