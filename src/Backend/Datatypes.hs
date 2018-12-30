@@ -1,20 +1,23 @@
 module Backend.Datatypes where
 
 import Control.Monad.State
-import qualified Data.Set as Set
-import qualified Data.Map as Map
+import qualified Data.Set
+import qualified Data.Map
 
 import Frontend.AbsLatte
 
 
 data StateLLVM = StateLLVM {
   nextRegister :: Integer,
-  namespace :: Set.Set Ident
+  fnRtypes :: Data.Map.Map String TType,
+  globalVarsDefs :: [String]
 } deriving (Show)
 
-initialState = StateLLVM 1 Set.empty
+initialState = StateLLVM 1 Data.Map.empty []
 
-type Result state a = StateT state IO a
+type Result a = StateT StateLLVM IO a
+type Instructions = [String]
+type Register = String
 
 type SPos = Maybe (Int, Int)
 type TType = Type SPos

@@ -12,8 +12,8 @@ declare i8* @strcat(i8*, i8*)
 declare void @exit(i32)
 
 define void @printInt(i32 %x) {
-    %t0 = getelementptr inbounds [4 x i8]* @dnl, i32 0, i32 0
-    call i32 (i8*, ...)* @printf(i8* %t0, i32 %x)
+    %t0 = getelementptr [4 x i8], [4 x i8]* @dnl, i32 0, i32 0
+    call i32 (i8*, ...) @printf(i8* %t0, i32 %x)
     ret void
 }
 
@@ -24,9 +24,9 @@ define void @printString(i8* %s) {
 
 define i32 @readInt() {
     %res = alloca i32
-    %t1 = getelementptr inbounds [4 x i8]* @dnl, i32 0, i32 0
-    call i32 (i8*, ...)* @scanf(i8* %t1, i32* %res)
-    %t2 = load i32* %res
+    %t1 = getelementptr [4 x i8], [4 x i8]* @dnl, i32 0, i32 0
+    call i32 (i8*, ...) @scanf(i8* %t1, i32* %res)
+    %t2 = load i32, i32* %res
     ret i32 %t2
 }
 
@@ -37,7 +37,7 @@ define i8* @readString() {
 }
 
 define void @error() {
-    %t1 = getelementptr inbounds [14 x i8]* @err, i32 0, i32 0
+    %t1 = getelementptr [14 x i8], [14 x i8]* @err, i32 0, i32 0
     call void @printString(i8* %t1)
     call void @exit(i32 1)
     ret void
