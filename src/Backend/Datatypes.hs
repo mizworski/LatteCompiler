@@ -15,12 +15,13 @@ type Env = Data.Map.Map Ident Loc
 data StateLLVM = StateLLVM {
   nextRegister :: Integer,
   nextLabel :: Integer,
+  nextBlock :: Integer,
   fnName :: String,
   globalVarsDefs :: [String],
   varsStore :: Data.Map.Map Loc (TType, Register)
 } deriving (Show)
 
-initialState = StateLLVM 0 0 "" [] Data.Map.empty
+initialState = StateLLVM 0 0 0 "" [] Data.Map.empty
 
 type Result a = StateT StateLLVM (ReaderT Env (ExceptT String IO)) a
 data TStatus = Running | Terminated | MaybeTerminated

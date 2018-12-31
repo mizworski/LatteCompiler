@@ -29,7 +29,7 @@ emitPredefinedFnDecls =
 emitFunction :: TTopDef -> Result String
 emitFunction (FnDef _ rtype (Ident fname) args body) = do
   state <- get
-  put $ StateLLVM 0 0 fname (globalVarsDefs state) (varsStore state)
+  put $ StateLLVM 0 0 0 fname (globalVarsDefs state) (varsStore state)
   header <- emitHeader rtype fname args
   entry <- emitEntry args
   (status, _, bodyInstrs) <- emitBlock body
@@ -72,8 +72,38 @@ emitStmt (Empty _) = do
   return (Running, env, [])
 emitStmt (BStmt _ block) = do
   env <- ask
+  incrementBlockNum
   (status, _, instrs) <- emitBlock block
   return (status, env, instrs)
+emitStmt (Decl _ _ []) = do
+  env <- ask
+  return (Running, env, [])
+emitStmt (Decl pos vtype ((NoInit _ (Ident vname)):vitems)) = do
+  env <- ask
+  loc <- newloc
+  env' <- return $ Data.Map.insert (Ident vname) loc env
+  state <- get
+  newstore <- return $ Data.Map.insert loc (vtype, vname) (varsStore state)
+  put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) newstore
+
+  blockNum <- getCurrentBlockNum
+  declVarInstrs <- return ["%" ++ vname ++ "." ++ (show blockNum) ++ " = alloca " ++ (llvmType vtype)]
+
+  (_, env'', declVarsInstrs) <- local (const env') $ emitStmt (Decl pos vtype vitems)
+  return (Running, env'', declVarInstrs ++ declVarsInstrs)
+emitStmt (Decl pos vtype ((Init _ (Ident vname) expr):vitems)) = do
+  env <- ask
+  loc <- newloc
+  env' <- return $ Data.Map.insert (Ident vname) loc env
+  state <- get
+  newstore <- return $ Data.Map.insert loc (vtype, vname) (varsStore state)
+  put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) newstore
+
+  blockNum <- getCurrentBlockNum
+  declVarInstrs <- return ["%" ++ vname ++ "." ++ (show blockNum) ++ " = alloca " ++ (llvmType vtype)]
+  (_, _, initInstrs) <- emitStmt (Ass pos (Ident vname) expr)
+  (_, env'', declVarsInstrs) <- local (const env') $ emitStmt (Decl pos vtype vitems)
+  return (Running, env'', declVarInstrs ++ initInstrs ++ declVarsInstrs)
 emitStmt (SExp _ expr) = do
   (instructions, _, _) <- emitExpr expr
   env <- ask
@@ -144,12 +174,12 @@ emitStmt (CondElse _ cond ifTrueStmt ifFalseStmt) = do
                           ", label %" ++ (init ifFalseLabel)]
 
       if (ifTrueStatus == Terminated && ifFalseStatus == Terminated) then do
-        instrs <- return $ jmpToCond ++ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++
+        instrs <- return $ jmpToCond ++ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs' ++
                            [ifFalseLabel] ++ ifFalseInstrs
         return (Terminated, env, instrs)
       else do
-        instrs <- return $ jmpToCond ++ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++
-                                 [ifFalseLabel] ++ ifFalseInstrs ++ [afterCondLabel]
+        instrs <- return $ jmpToCond ++ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs' ++
+                                 [ifFalseLabel] ++ ifFalseInstrs' ++ [afterCondLabel]
         if (ifTrueStatus == Running && ifFalseStatus == Running) then
           return (Running, env, instrs)
         else
@@ -198,8 +228,8 @@ emitExpr (EString _ str) = do
   -- todo add fnName to str def as registers starts from 0 for each fn
   globalVarDef <- return $ "@str" ++ (show reg) ++ " = internal constant ["
                             ++ (show $ (length str) - 1) ++ " x i8] c\"" ++ (tail $ init str) ++ "\\00\""
-  put $ StateLLVM (nextRegister state) (nextLabel state) (fnName state) (globalVarDef : (globalVarsDefs state))
-                  (varsStore state)
+  put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state)
+                  (globalVarDef : (globalVarsDefs state)) (varsStore state)
   instr <- return $ "%" ++ (show reg) ++ " = getelementptr [" ++ (show $ (length str) - 1) ++ " x i8], " ++
                     "[" ++ (show $ (length str) - 1) ++ " x i8]* @str" ++ (show reg) ++ ", i32 0, i32 0"
   return ([instr], Str (Just (0, 0)), "%" ++ (show reg))
@@ -237,19 +267,35 @@ appendJmpInstrs :: TStatus -> Instructions -> Instructions -> Instructions
 appendJmpInstrs Terminated instrs jmpInstr = instrs
 appendJmpInstrs _ instrs jmpInstr = instrs ++ jmpInstr
 
+getCurrentRegister :: Result Integer
+getCurrentRegister = do
+  state <- get
+  return $ nextRegister state
+
 getNextRegister :: Result Integer
 getNextRegister = do
   state <- get
   newReg <- return $ nextRegister state
-  put $ StateLLVM (newReg + 1) (nextLabel state) (fnName state) (globalVarsDefs state) (varsStore state)
+  put $ StateLLVM (newReg + 1) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) (varsStore state)
   return newReg
 
 getNextLabelNum :: Result Integer
 getNextLabelNum = do
   state <- get
   newLabel <- return $ nextLabel state
-  put $ StateLLVM (nextRegister state) (newLabel + 1) (fnName state) (globalVarsDefs state) (varsStore state)
+  put $ StateLLVM (nextRegister state) (newLabel + 1) (nextBlock state) (fnName state) (globalVarsDefs state) (varsStore state)
   return newLabel
+
+getCurrentBlockNum :: Result Integer
+getCurrentBlockNum = do
+  state <- get
+  return $ nextBlock state
+
+incrementBlockNum :: Result ()
+incrementBlockNum = do
+  state <- get
+  put $ StateLLVM (nextRegister state) (nextLabel state) ((nextBlock state) + 1) (fnName state) (globalVarsDefs state)
+                  (varsStore state)
 
 getVarType:: Ident -> Result TType
 getVarType vname = do
@@ -282,8 +328,8 @@ putFn fname fnRtype = do
   loc <- newloc
   env' <- return $ Data.Map.insert fname loc env
   state <- get
-  newstore <- return $ Data.Map.insert loc (fnRtype, "$$$") (varsStore state) -- todo $$$
-  put $ StateLLVM (nextRegister state) (nextLabel state) (fnName state) (globalVarsDefs state) newstore
+  newstore <- return $ Data.Map.insert loc (fnRtype, "@" ++ (fnName state)) (varsStore state) -- todo $$$
+  put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) newstore
   return env'
 
 newloc :: Result Loc
