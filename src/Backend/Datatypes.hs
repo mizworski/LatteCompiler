@@ -38,3 +38,5 @@ type TExpr = Expr SPos
 type TProgram = Program SPos
 type TTopDef = TopDef SPos
 type TBlock = Block SPos
+type TMulOp = MulOp SPos
+type TAddOp = AddOp SPos

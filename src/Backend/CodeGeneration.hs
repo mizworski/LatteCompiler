@@ -16,7 +16,7 @@ emitProgram (Program _ stmts) = do
   predefinedFns <- local (const env') $ emitPredefinedFnDecls
   functionDefs <- local (const env') $ mapM emitFunction stmts
   state <- get
-  return $ unlines $ predefinedFns ++ [""] ++ (globalVarsDefs state) ++ [""] ++ functionDefs
+  return $ unlines $ predefinedFns ++ [""] ++ (reverse $ globalVarsDefs state) ++ [""] ++ functionDefs
 
 emitPredefinedFnDecls :: Result Instructions
 emitPredefinedFnDecls =
@@ -230,17 +230,33 @@ emitStmt (While _ cond body) = do
       return (Running, env, instrs)
 
 emitExpr :: TExpr -> Result (Instructions, TType, Register)
+emitExpr (EVar _ vident) = do
+  env <- ask
+  state <- get
+  maybeLoc <- return $ Data.Map.lookup vident env
+  case maybeLoc of
+    (Just loc) -> do
+      maybeVTypeReg <- return $ Data.Map.lookup loc (varsStore state)
+      case maybeVTypeReg of
+        (Just (vtype, vreg)) -> do
+          register <- getNextRegister
+          loadInstrs <- return ["%" ++ (show register) ++ " = load " ++ (llvmType vtype) ++ ", " ++ (llvmType vtype) ++ "* " ++ vreg]
+          return (loadInstrs, vtype, "%" ++ (show register))
+        Nothing -> throwError "Loc not found"
+    Nothing -> throwError "Undeclared variable in env"
 emitExpr (ELitInt _ num) = return ([], Int (Just (0,0)), show num)
+emitExpr (ELitTrue _) = return ([], Bool (Just (0,0)), "1")
+emitExpr (ELitFalse _) = return ([], Bool (Just (0,0)), "0")
 emitExpr (EString _ str) = do
   reg <- getNextRegister
   state <- get
-  -- todo add fnName to str def as registers starts from 0 for each fn
-  globalVarDef <- return $ "@str" ++ (show reg) ++ " = internal constant ["
+  strReg <- return $ "@.str." ++ (fnName state) ++ "." ++ (show reg)
+  globalVarDef <- return $  strReg ++ " = internal constant ["
                             ++ (show $ (length str) - 1) ++ " x i8] c\"" ++ (tail $ init str) ++ "\\00\""
   put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state)
                   (globalVarDef : (globalVarsDefs state)) (varsStore state)
   instr <- return $ "%" ++ (show reg) ++ " = getelementptr [" ++ (show $ (length str) - 1) ++ " x i8], " ++
-                    "[" ++ (show $ (length str) - 1) ++ " x i8]* @str" ++ (show reg) ++ ", i32 0, i32 0"
+                    "[" ++ (show $ (length str) - 1) ++ " x i8]* " ++ strReg ++ ", i32 0, i32 0"
   return ([instr], Str (Just (0, 0)), "%" ++ (show reg))
 emitExpr (EApp _ (Ident fname) exprs) = do
   state <- get
@@ -258,7 +274,31 @@ emitExpr (EApp _ (Ident fname) exprs) = do
       fnCallInstr <- return $ [["%" ++ (show register) ++ " = " ++ fnCall]]
       instrs' <- return $ instrs ++ fnCallInstr
       return (foldr (++) [] instrs', Int (Just (0, 0)), "%" ++ (show register))
-
+emitExpr (Neg pos expr) = emitExpr (EAdd pos (ELitInt pos 0) (Minus pos) expr)
+emitExpr (Not pos bexpr) = do
+  (instrs, _, resReg) <- emitExpr bexpr
+  register <- getNextRegister
+  negateInstrs <- return ["%" ++ (show register) ++ " = sub i1 1, " ++ resReg]
+  return (instrs ++ negateInstrs, Bool (Just (0,0)), "%" ++ (show register))
+emitExpr (EMul _ expr1 (Mod _) expr2) = do
+  (instrs1, etype, reg1) <- emitExpr expr1
+  (instrs2, _, reg2) <- emitExpr expr2
+  reg <- getNextRegister
+  -- todo change remainder to modulo
+  mulInstr <- return ["%" ++ (show reg) ++ " = srem " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+  return (instrs1 ++ instrs2 ++ mulInstr, etype, "%" ++ (show reg))
+emitExpr (EMul _ expr1 op expr2) = do
+  (instrs1, etype, reg1) <- emitExpr expr1
+  (instrs2, _, reg2) <- emitExpr expr2
+  reg <- getNextRegister
+  mulInstr <- return ["%" ++ (show reg) ++ " = " ++ (getMulOpInstr op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+  return (instrs1 ++ instrs2 ++ mulInstr, etype, "%" ++ (show reg))
+emitExpr (EAdd _ expr1 op expr2) = do
+  (instrs1, etype, reg1) <- emitExpr expr1
+  (instrs2, _, reg2) <- emitExpr expr2
+  reg <- getNextRegister
+  addInstr <- return ["%" ++ (show reg) ++ " = " ++ (getAddOpInstr op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+  return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
 
 emitExpr _ = return ([], Int (Just (0, 0)), "0")
 
@@ -351,7 +391,14 @@ llvmType (Int _) = "i32"
 llvmType (Str _) = "i8*"
 llvmType (Bool _) = "i1"
 llvmType (Void _) = "void"
--- llvmType _ = "**err**"
+
+getMulOpInstr :: TMulOp -> String
+getMulOpInstr (Times _) = "mul"
+getMulOpInstr (Div _) = "sdiv"
+
+getAddOpInstr :: TAddOp -> String
+getAddOpInstr (Plus _) = "add"
+getAddOpInstr (Minus _) = "sub"
 
 getDefaultValExpr :: TType -> TExpr
 getDefaultValExpr (Int _) = ELitInt (Just (0, 0)) 0

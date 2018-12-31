@@ -140,7 +140,13 @@ instance Functor AddOp where
         Plus a -> Plus (f a)
         Minus a -> Minus (f a)
 data MulOp a = Times a | Div a | Mod a
-  deriving (Eq, Ord, Show, Read)
+  deriving (Ord, Show, Read)
+
+instance Eq (MulOp a) where
+  (Times _) == (Times _) = True
+  (Div _) == (Div _) = True
+  (Mod _) == (Mod _) = True
+  _ == _ = False
 
 instance Functor MulOp where
     fmap f x = case x of
