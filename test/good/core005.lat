@@ -3,6 +3,8 @@
 int main () {
   int x;
   int y = 56;
+  x++;
+  x--;
   if (y + 45 <= 2) {
     x = 1;
   } else {

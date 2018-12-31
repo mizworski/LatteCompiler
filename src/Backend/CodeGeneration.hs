@@ -78,32 +78,45 @@ emitStmt (BStmt _ block) = do
 emitStmt (Decl _ _ []) = do
   env <- ask
   return (Running, env, [])
-emitStmt (Decl pos vtype ((NoInit _ (Ident vname)):vitems)) = do
-  env <- ask
-  loc <- newloc
-  env' <- return $ Data.Map.insert (Ident vname) loc env
-  state <- get
-  newstore <- return $ Data.Map.insert loc (vtype, vname) (varsStore state)
-  put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) newstore
-
-  blockNum <- getCurrentBlockNum
-  declVarInstrs <- return ["%" ++ vname ++ "." ++ (show blockNum) ++ " = alloca " ++ (llvmType vtype)]
-
-  (_, env'', declVarsInstrs) <- local (const env') $ emitStmt (Decl pos vtype vitems)
-  return (Running, env'', declVarInstrs ++ declVarsInstrs)
+emitStmt (Decl pos vtype ((NoInit pos2 (Ident vname)):vitems)) = do
+  emitStmt (Decl pos vtype ((Init pos2 (Ident vname) (getDefaultValExpr vtype)):vitems))
 emitStmt (Decl pos vtype ((Init _ (Ident vname) expr):vitems)) = do
   env <- ask
   loc <- newloc
   env' <- return $ Data.Map.insert (Ident vname) loc env
   state <- get
-  newstore <- return $ Data.Map.insert loc (vtype, vname) (varsStore state)
-  put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) newstore
 
   blockNum <- getCurrentBlockNum
-  declVarInstrs <- return ["%" ++ vname ++ "." ++ (show blockNum) ++ " = alloca " ++ (llvmType vtype)]
-  (_, _, initInstrs) <- emitStmt (Ass pos (Ident vname) expr)
+  varReg <- return $ "%" ++ vname ++ "." ++ (show blockNum)
+  declVarInstrs <- return [varReg ++ " = alloca " ++ (llvmType vtype)]
+
+  newstore <- return $ Data.Map.insert loc (vtype, varReg) (varsStore state)
+  put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) newstore
+
+  (_, _, initInstrs) <- local (const env') $ emitStmt (Ass pos (Ident vname) expr)
   (_, env'', declVarsInstrs) <- local (const env') $ emitStmt (Decl pos vtype vitems)
   return (Running, env'', declVarInstrs ++ initInstrs ++ declVarsInstrs)
+emitStmt (Ass _ (Ident vname) expr) = do
+  (instrs, _, resReg) <- emitExpr expr
+  env <- ask
+  state <- get
+  maybeLoc <- return $ Data.Map.lookup (Ident vname) env
+  case maybeLoc of
+    (Just loc) -> do
+      maybeVTypeReg <- return $ Data.Map.lookup loc (varsStore state)
+      case maybeVTypeReg of
+        (Just (vtype, vreg)) -> do
+          assignInstr <- return ["store " ++ (llvmType vtype) ++ " " ++ resReg ++ ", " ++ (llvmType vtype) ++ "* " ++ vreg]
+          return (Running, env, instrs ++ assignInstr)
+        Nothing -> throwError "Loc not found"
+    Nothing -> throwError "Undeclared variable in env"
+emitStmt (Incr pos vident) = do
+  addOneExpr <- return (EAdd pos (EVar pos vident) (Plus pos) (ELitInt pos 1))
+  emitStmt (Ass pos vident addOneExpr)
+emitStmt (Decr pos vident) = do
+  addOneExpr <- return (EAdd pos (EVar pos vident) (Minus pos) (ELitInt pos 1))
+  emitStmt (Ass pos vident addOneExpr)
+
 emitStmt (SExp _ expr) = do
   (instructions, _, _) <- emitExpr expr
   env <- ask
@@ -215,10 +228,6 @@ emitStmt (While _ cond body) = do
       instrs <- return $ jmpToCond ++ [loopBodyLabel] ++ loopBodyInstrs ++ jmpToCond ++ [loopCondLabel] ++ condInstrs ++
                          jmpAfterLoop ++ [afterLoopLabel]
       return (Running, env, instrs)
-
-emitStmt _ = do
-  env <- ask
-  return (Running, env, [])
 
 emitExpr :: TExpr -> Result (Instructions, TType, Register)
 emitExpr (ELitInt _ num) = return ([], Int (Just (0,0)), show num)
@@ -343,6 +352,11 @@ llvmType (Str _) = "i8*"
 llvmType (Bool _) = "i1"
 llvmType (Void _) = "void"
 -- llvmType _ = "**err**"
+
+getDefaultValExpr :: TType -> TExpr
+getDefaultValExpr (Int _) = ELitInt (Just (0, 0)) 0
+getDefaultValExpr (Str _) = EString (Just (0, 0)) ""
+getDefaultValExpr (Bool _) = ELitFalse (Just (0, 0))
 
 simplifyConstExpr :: TExpr -> Maybe Bool
 simplifyConstExpr (ELitTrue _) = Just True
