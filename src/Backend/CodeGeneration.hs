@@ -39,7 +39,7 @@ emitFunction (FnDef _ rtype (Ident fname) args body) = do
       body <- return $ [if "." `isPrefixOf` instr then instr else "    " ++ instr | instr <- bodyInstrs]
       footer <- return ["}"]
       return $ unlines $ header ++ entry ++ body ++ footer
-    Terminated -> do
+    otherwise -> do
       body <- return $ [if "." `isPrefixOf` instr then instr else "    " ++ instr | instr <- bodyInstrs]
       footer <- return ["}"]
       return $ unlines $ header ++ entry ++ body ++ footer
@@ -61,7 +61,7 @@ emitBlock (Block pos (stmt:stmts)) = do
   (status, env', stmtCode) <- emitStmt stmt
   case status of
     Terminated -> return (Terminated, env', stmtCode)
-    Running -> do
+    otherwise -> do
       (status', _, stmtsCode) <- local (const env') $ emitBlock (Block pos stmts)
       return $ (status', env, stmtCode ++ stmtsCode)
 
@@ -84,9 +84,9 @@ emitStmt (Ret _ expr) = do
 emitStmt (VRet _) = do
   env <- ask
   return (Terminated, env, ["ret void"])
-emitStmt (Cond _ bexpr ifTrueStmt) = do
+emitStmt (Cond _ cond ifTrueStmt) = do
   env <- ask
-  case (simplifyConstExpr bexpr) of
+  case (simplifyConstExpr cond) of
     (Just False) -> return (Running, env, [])
     (Just True) -> do
       (status, _, instrs) <- emitStmt ifTrueStmt
@@ -94,11 +94,11 @@ emitStmt (Cond _ bexpr ifTrueStmt) = do
     Nothing -> do
       condLabelReg <- getNextRegister
       condLabel <- return $ ".if.cond." ++ (show condLabelReg) ++ ":"
-      (condInstrs, _, condReg) <- emitExpr bexpr
+      (condInstrs, _, condReg) <- emitExpr cond
 
       ifTrueLabelReg <- getNextRegister
       ifTrueLabel <- return $ ".if.true." ++ (show ifTrueLabelReg) ++ ":"
-      (_, _, ifTrueInstrs) <- emitStmt ifTrueStmt
+      (status, _, ifTrueInstrs) <- emitStmt ifTrueStmt
       afterCondReg <- getNextRegister
       afterCondLabel <- return $ ".after.cond." ++ (show afterCondReg) ++ ":"
       jmpAfterStmt <- return $ ["br label %" ++ (init afterCondLabel)]
@@ -106,10 +106,10 @@ emitStmt (Cond _ bexpr ifTrueStmt) = do
                           ", label %" ++ (init afterCondLabel)]
       instrs <- return $ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++ jmpAfterStmt ++
                          [afterCondLabel]
-      return (Running, env, instrs)
-emitStmt (CondElse _ bexpr ifTrueStmt ifFalseStmt) = do
+      if (status == Running) then return (Running, env, instrs) else return (MaybeTerminated, env, instrs)
+emitStmt (CondElse _ cond ifTrueStmt ifFalseStmt) = do
   env <- ask
-  case (simplifyConstExpr bexpr) of
+  case (simplifyConstExpr cond) of
     (Just False) -> do
       (status, _, instrs) <- emitStmt ifFalseStmt
       return (status, env, instrs)
@@ -119,7 +119,7 @@ emitStmt (CondElse _ bexpr ifTrueStmt ifFalseStmt) = do
     Nothing -> do
       condLabelReg <- getNextRegister
       condLabel <- return $ ".if.cond." ++ (show condLabelReg) ++ ":"
-      (condInstrs, _, condReg) <- emitExpr bexpr
+      (condInstrs, _, condReg) <- emitExpr cond
 
       ifTrueLabelReg <- getNextRegister
       ifTrueLabel <- return $ ".if.true." ++ (show ifTrueLabelReg) ++ ":"
@@ -137,14 +137,45 @@ emitStmt (CondElse _ bexpr ifTrueStmt ifFalseStmt) = do
                           [ifFalseLabel] ++ ifFalseInstrs ++ jmpAfterStmt ++ [afterCondLabel]
       if (ifTrueStatus == Terminated && ifFalseStatus == Terminated) then
         return (Terminated, env, instrs)
-      else
+      else if (ifTrueStatus == Running && ifFalseStatus == Running) then
         return (Running, env, instrs)
+      else
+        return (MaybeTerminated, env, instrs)
+emitStmt (While _ cond body) = do
+  env <- ask
+  case (simplifyConstExpr cond) of
+    (Just False) -> return (Running, env, [])
+    (Just True) -> do
+      loopBodyLabelReg <- getNextRegister
+      loopBodyLabel <- return $ ".loop.body." ++ (show loopBodyLabelReg) ++ ":"
+      (_, _, loopBodyInstrs) <- emitStmt body
+      jmpInstr <- return $ ["br label %" ++ (init loopBodyLabel)]
+      instrs <- return $ [loopBodyLabel] ++ loopBodyInstrs ++ jmpInstr
+      return (Terminated, env, instrs)
+    Nothing -> do
+      loopBodyLabelReg <- getNextRegister
+      loopBodyLabel <- return $ ".loop.body." ++ (show loopBodyLabelReg) ++ ":"
+      (_, _, loopBodyInstrs) <- emitStmt body
 
+      loopCondLabelReg <- getNextRegister
+      loopCondLabel <- return $ ".loop.cond." ++ (show loopCondLabelReg) ++ ":"
+      (condInstrs, _, condReg) <- emitExpr cond
+
+      afterLoopReg <- getNextRegister
+      afterLoopLabel <- return $ ".after.loop." ++ (show afterLoopReg) ++ ":"
+      jmpAfterLoop <- return ["br i1 " ++ condReg ++ ", label %" ++ (init loopBodyLabel) ++
+                              ", label %" ++ (init afterLoopLabel)]
+      jmpToCond <- return $ ["br label %" ++ (init loopCondLabel)]
+      jmpToBody <- return $ ["br label %" ++ (init loopBodyLabel)]
+
+      -- is jmp before label necessary / expected?
+      instrs <- return $ jmpToCond ++ [loopBodyLabel] ++ loopBodyInstrs ++ jmpToCond ++ [loopCondLabel] ++ condInstrs ++
+                         jmpAfterLoop ++ [afterLoopLabel]
+      return (Running, env, instrs)
 
 emitStmt _ = do
   env <- ask
   return (Running, env, [])
-
 
 emitExpr :: TExpr -> Result (Instructions, TType, Register)
 emitExpr (ELitInt _ num) = return ([], Int (Just (0,0)), show num)

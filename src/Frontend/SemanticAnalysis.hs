@@ -184,7 +184,7 @@ checkStatement (While pos bexpr loopBody) retType = do
       env' <- local (const env) $ checkStatement loopBody retType
       case (computationStatus env') of
         Running -> throwError $ tokenPos pos ++ " infinite loop"
-        otherwise -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = MaybeEnded}
+        otherwise -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = Ended}
     otherwise -> do
       env' <- checkStatement loopBody retType
       case (computationStatus env') of
