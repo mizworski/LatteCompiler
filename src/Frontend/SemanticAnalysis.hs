@@ -357,7 +357,8 @@ declareBuiltInFns = do
   env'' <- local (const env') $ declare (Ident "error") (Fun pos (Void pos) [])
   env''' <- local (const env'') $ declare (Ident "readInt") (Fun pos (Int pos) [])
   env'''' <- local (const env''') $ declare (Ident "readString") (Fun pos (Str pos) [])
-  return env''''
+  env''''' <- local (const env'''') $ declare (Ident "__concat") (Fun pos (Str pos) [(Str pos), (Str pos)])
+  return env'''''
 
 checkFunctionSignatures :: [TTopDef] -> PartialResult Env
 checkFunctionSignatures [] = do

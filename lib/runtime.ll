@@ -43,7 +43,7 @@ define void @error() {
     ret void
 }
 
-define i8* @concat_(i8* %s1, i8* %s2) {
+define i8* @__concat(i8* %s1, i8* %s2) {
     %1 = call i32 @strlen(i8* %s1)
     %2 = call i32 @strlen(i8* %s2)
     %3 = add i32 %1, 1

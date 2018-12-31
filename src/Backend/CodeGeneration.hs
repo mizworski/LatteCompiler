@@ -24,7 +24,8 @@ emitPredefinedFnDecls =
             "declare void @printString(i8*)",
             "declare i32 @readInt()",
             "declare i8* @readString()",
-            "declare void @error()"]
+            "declare void @error()",
+            "declare i8* @__concat(i8*, i8*)"]
 
 emitFunction :: TTopDef -> Result String
 emitFunction (FnDef _ rtype (Ident fname) args body) = do
@@ -279,7 +280,7 @@ emitExpr (Not pos bexpr) = do
   (instrs, _, resReg) <- emitExpr bexpr
   register <- getNextRegister
   negateInstrs <- return ["%" ++ (show register) ++ " = sub i1 1, " ++ resReg]
-  return (instrs ++ negateInstrs, Bool (Just (0,0)), "%" ++ (show register))
+  return (instrs ++ negateInstrs, Bool (Just (0, 0)), "%" ++ (show register))
 emitExpr (EMul _ expr1 (Mod _) expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
@@ -297,8 +298,13 @@ emitExpr (EAdd _ expr1 op expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
   reg <- getNextRegister
-  addInstr <- return ["%" ++ (show reg) ++ " = " ++ (getAddOpInstr op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
-  return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
+  case (etype == (Str (Just (0, 0)))) of
+    True -> do
+      addInstr <- return ["%" ++ (show reg) ++ " = call i8* @__concat(i8* " ++ reg1 ++ ", i8* " ++ reg2 ++ ")"]
+      return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
+    False -> do
+      addInstr <- return ["%" ++ (show reg) ++ " = " ++ (getAddOpInstr op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+      return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
 
 emitExpr _ = return ([], Int (Just (0, 0)), "0")
 
@@ -365,7 +371,8 @@ putFnTypes [] = do
   env''' <- local (const env'') $ putFn (Ident "error") (Void (Just (0, 0)))
   env'''' <- local (const env''') $ putFn (Ident "readInt") (Int (Just (0, 0)))
   env''''' <- local (const env'''') $ putFn (Ident "readString") (Str (Just (0, 0)))
-  return env'''''
+  env'''''' <- local (const env''''') $ putFn (Ident "__concat") (Str (Just (0, 0)))
+  return env''''''
 
 putFnTypes ((FnDef _ rtype fname _ _):stmts) = do
   env' <- putFn fname rtype
