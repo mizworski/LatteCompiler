@@ -20,6 +20,7 @@ import Frontend.SemanticAnalysis
 compileToLLVM :: String -> String -> IO ()
 compileToLLVM inputFilename outputFilename = do
   program <- readFile inputFilename
+  putStrLn program
   case (pProgram $ myLexer program) of
     (Ok ir) -> do
       typeCheckRes <- runExceptT $ semanticAnalysis ir
@@ -33,7 +34,6 @@ compileToLLVM inputFilename outputFilename = do
           -- semantic analysis passed
           hPutStrLn stderr "OK"
 --           ir <- middleEnd ir
-          putStrLn $ show ir
           maybeRes <- runExceptT $ runReaderT (runStateT (emitProgram ir) initialState) Data.Map.empty
           case maybeRes of
             (Left errMsg) -> do

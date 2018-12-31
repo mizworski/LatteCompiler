@@ -29,7 +29,7 @@ emitPredefinedFnDecls =
 emitFunction :: TTopDef -> Result String
 emitFunction (FnDef _ rtype (Ident fname) args body) = do
   state <- get
-  put $ StateLLVM 0 (globalVarsDefs state) (varsStore state)
+  put $ StateLLVM 0 0 fname (globalVarsDefs state) (varsStore state)
   header <- emitHeader rtype fname args
   entry <- emitEntry args
   (status, _, bodyInstrs) <- emitBlock body
@@ -49,8 +49,9 @@ emitHeader rtype fname args =
   return ["define " ++ (llvmType rtype) ++ " @" ++ fname ++ "(" ++ (emitArguments args) ++ ") {"]
 
 emitEntry :: [TArg] -> Result Instructions
--- emitEntry args = return ["entry:"]
-emitEntry args = return []
+emitEntry args = do
+  entryLabelNum <- getNextLabelNum
+  return [".entry." ++ (show entryLabelNum) ++ ":"]
 
 emitBlock :: TBlock -> Result (TStatus, Env, Instructions)
 emitBlock (Block _ []) = do
@@ -92,20 +93,21 @@ emitStmt (Cond _ cond ifTrueStmt) = do
       (status, _, instrs) <- emitStmt ifTrueStmt
       return (status, env, instrs)
     Nothing -> do
-      condLabelReg <- getNextRegister
-      condLabel <- return $ ".if.cond." ++ (show condLabelReg) ++ ":"
+      condLabelNum <- getNextLabelNum
+      condLabel <- return $ ".if.cond." ++ (show condLabelNum) ++ ":"
       (condInstrs, _, condReg) <- emitExpr cond
 
-      ifTrueLabelReg <- getNextRegister
-      ifTrueLabel <- return $ ".if.true." ++ (show ifTrueLabelReg) ++ ":"
+      ifTrueLabelNum <- getNextLabelNum
+      ifTrueLabel <- return $ ".if.true." ++ (show ifTrueLabelNum) ++ ":"
       (status, _, ifTrueInstrs) <- emitStmt ifTrueStmt
-      afterCondReg <- getNextRegister
-      afterCondLabel <- return $ ".after.cond." ++ (show afterCondReg) ++ ":"
+      afterCondLabelNum <- getNextLabelNum
+      afterCondLabel <- return $ ".after.cond." ++ (show afterCondLabelNum) ++ ":"
       jmpAfterStmt <- return $ ["br label %" ++ (init afterCondLabel)]
       jmpInstr <- return ["br i1 " ++ condReg ++ ", label %" ++ (init ifTrueLabel) ++
                           ", label %" ++ (init afterCondLabel)]
-      instrs <- return $ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++ jmpAfterStmt ++
-                         [afterCondLabel]
+      jmpToCond <- return ["br label %" ++ (init condLabel)]
+      instrs <- return $ jmpToCond ++ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++
+                         jmpAfterStmt ++ [afterCondLabel]
       if (status == Running) then return (Running, env, instrs) else return (MaybeTerminated, env, instrs)
 emitStmt (CondElse _ cond ifTrueStmt ifFalseStmt) = do
   env <- ask
@@ -117,52 +119,63 @@ emitStmt (CondElse _ cond ifTrueStmt ifFalseStmt) = do
       (status, _, instrs) <- emitStmt ifTrueStmt
       return (status, env, instrs)
     Nothing -> do
-      condLabelReg <- getNextRegister
-      condLabel <- return $ ".if.cond." ++ (show condLabelReg) ++ ":"
+      condLabelNum <- getNextLabelNum
+      condLabel <- return $ ".if.cond." ++ (show condLabelNum) ++ ":"
       (condInstrs, _, condReg) <- emitExpr cond
 
-      ifTrueLabelReg <- getNextRegister
-      ifTrueLabel <- return $ ".if.true." ++ (show ifTrueLabelReg) ++ ":"
+      ifTrueLabelNum <- getNextLabelNum
+      ifTrueLabel <- return $ ".if.true." ++ (show ifTrueLabelNum) ++ ":"
       (ifTrueStatus, _, ifTrueInstrs) <- emitStmt ifTrueStmt
-      ifFalseLabelReg <- getNextRegister
-      ifFalseLabel <- return $ ".if.false." ++ (show ifFalseLabelReg) ++ ":"
+
+      ifFalseLabelNum <- getNextLabelNum
+      ifFalseLabel <- return $ ".if.false." ++ (show ifFalseLabelNum) ++ ":"
       (ifFalseStatus, _, ifFalseInstrs) <- emitStmt ifFalseStmt
 
-      afterCondReg <- getNextRegister
-      afterCondLabel <- return $ ".after.cond." ++ (show afterCondReg) ++ ":"
+      afterCondLabelNum <- getNextLabelNum
+      afterCondLabel <- return $ ".after.cond." ++ (show afterCondLabelNum) ++ ":"
+
+      jmpToCond <- return ["br label %" ++ (init condLabel)]
       jmpAfterStmt <- return $ ["br label %" ++ (init afterCondLabel)]
+
+      ifTrueInstrs' <- return $ appendJmpInstrs ifTrueStatus ifTrueInstrs jmpAfterStmt
+      ifFalseInstrs' <- return $ appendJmpInstrs ifFalseStatus ifFalseInstrs jmpAfterStmt
+
       jmpInstr <- return ["br i1 " ++ condReg ++ ", label %" ++ (init ifTrueLabel) ++
                           ", label %" ++ (init ifFalseLabel)]
-      instrs <- return $ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++ jmpAfterStmt ++
-                          [ifFalseLabel] ++ ifFalseInstrs ++ jmpAfterStmt ++ [afterCondLabel]
-      if (ifTrueStatus == Terminated && ifFalseStatus == Terminated) then
+
+      if (ifTrueStatus == Terminated && ifFalseStatus == Terminated) then do
+        instrs <- return $ jmpToCond ++ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++
+                           [ifFalseLabel] ++ ifFalseInstrs
         return (Terminated, env, instrs)
-      else if (ifTrueStatus == Running && ifFalseStatus == Running) then
-        return (Running, env, instrs)
-      else
-        return (MaybeTerminated, env, instrs)
+      else do
+        instrs <- return $ jmpToCond ++ [condLabel] ++ condInstrs ++ jmpInstr ++ [ifTrueLabel] ++ ifTrueInstrs ++
+                                 [ifFalseLabel] ++ ifFalseInstrs ++ [afterCondLabel]
+        if (ifTrueStatus == Running && ifFalseStatus == Running) then
+          return (Running, env, instrs)
+        else
+          return (MaybeTerminated, env, instrs)
 emitStmt (While _ cond body) = do
   env <- ask
   case (simplifyConstExpr cond) of
     (Just False) -> return (Running, env, [])
     (Just True) -> do
-      loopBodyLabelReg <- getNextRegister
-      loopBodyLabel <- return $ ".loop.body." ++ (show loopBodyLabelReg) ++ ":"
+      loopBodyLabelNum <- getNextLabelNum
+      loopBodyLabel <- return $ ".loop.body." ++ (show loopBodyLabelNum) ++ ":"
       (_, _, loopBodyInstrs) <- emitStmt body
       jmpInstr <- return $ ["br label %" ++ (init loopBodyLabel)]
       instrs <- return $ [loopBodyLabel] ++ loopBodyInstrs ++ jmpInstr
       return (Terminated, env, instrs)
     Nothing -> do
-      loopBodyLabelReg <- getNextRegister
-      loopBodyLabel <- return $ ".loop.body." ++ (show loopBodyLabelReg) ++ ":"
+      loopBodyLabelNum <- getNextLabelNum
+      loopBodyLabel <- return $ ".loop.body." ++ (show loopBodyLabelNum) ++ ":"
       (_, _, loopBodyInstrs) <- emitStmt body
 
-      loopCondLabelReg <- getNextRegister
-      loopCondLabel <- return $ ".loop.cond." ++ (show loopCondLabelReg) ++ ":"
+      loopCondLabelNum <- getNextLabelNum
+      loopCondLabel <- return $ ".loop.cond." ++ (show loopCondLabelNum) ++ ":"
       (condInstrs, _, condReg) <- emitExpr cond
 
-      afterLoopReg <- getNextRegister
-      afterLoopLabel <- return $ ".after.loop." ++ (show afterLoopReg) ++ ":"
+      afterLoopLabelNum <- getNextLabelNum
+      afterLoopLabel <- return $ ".after.loop." ++ (show afterLoopLabelNum) ++ ":"
       jmpAfterLoop <- return ["br i1 " ++ condReg ++ ", label %" ++ (init loopBodyLabel) ++
                               ", label %" ++ (init afterLoopLabel)]
       jmpToCond <- return $ ["br label %" ++ (init loopCondLabel)]
@@ -185,7 +198,8 @@ emitExpr (EString _ str) = do
   -- todo add fnName to str def as registers starts from 0 for each fn
   globalVarDef <- return $ "@str" ++ (show reg) ++ " = internal constant ["
                             ++ (show $ (length str) - 1) ++ " x i8] c\"" ++ (tail $ init str) ++ "\\00\""
-  put $ StateLLVM (nextRegister state) (globalVarDef : (globalVarsDefs state)) (varsStore state)
+  put $ StateLLVM (nextRegister state) (nextLabel state) (fnName state) (globalVarDef : (globalVarsDefs state))
+                  (varsStore state)
   instr <- return $ "%" ++ (show reg) ++ " = getelementptr [" ++ (show $ (length str) - 1) ++ " x i8], " ++
                     "[" ++ (show $ (length str) - 1) ++ " x i8]* @str" ++ (show reg) ++ ", i32 0, i32 0"
   return ([instr], Str (Just (0, 0)), "%" ++ (show reg))
@@ -219,12 +233,23 @@ emitParameters ptypes pregs = intercalate ", " (emitParameters' ptypes pregs) wh
   emitParameters' [] [] = []
   emitParameters' (ptype:ptypes) (preg:pregs) = ((llvmType ptype) ++ " " ++ preg) : (emitParameters' ptypes pregs)
 
+appendJmpInstrs :: TStatus -> Instructions -> Instructions -> Instructions
+appendJmpInstrs Terminated instrs jmpInstr = instrs
+appendJmpInstrs _ instrs jmpInstr = instrs ++ jmpInstr
+
 getNextRegister :: Result Integer
 getNextRegister = do
   state <- get
-  nextReg <- return $ nextRegister state
-  put $ StateLLVM (nextReg + 1) (globalVarsDefs state) (varsStore state)
-  return nextReg
+  newReg <- return $ nextRegister state
+  put $ StateLLVM (newReg + 1) (nextLabel state) (fnName state) (globalVarsDefs state) (varsStore state)
+  return newReg
+
+getNextLabelNum :: Result Integer
+getNextLabelNum = do
+  state <- get
+  newLabel <- return $ nextLabel state
+  put $ StateLLVM (nextRegister state) (newLabel + 1) (fnName state) (globalVarsDefs state) (varsStore state)
+  return newLabel
 
 getVarType:: Ident -> Result TType
 getVarType vname = do
@@ -258,7 +283,7 @@ putFn fname fnRtype = do
   env' <- return $ Data.Map.insert fname loc env
   state <- get
   newstore <- return $ Data.Map.insert loc (fnRtype, "$$$") (varsStore state) -- todo $$$
-  put $ StateLLVM (nextRegister state) (globalVarsDefs state) newstore
+  put $ StateLLVM (nextRegister state) (nextLabel state) (fnName state) (globalVarsDefs state) newstore
   return env'
 
 newloc :: Result Loc
