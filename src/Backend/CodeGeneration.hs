@@ -31,23 +31,25 @@ emitFunction :: TTopDef -> Result String
 emitFunction (FnDef _ rtype (Ident fname) args body) = do
   state <- get
   put $ StateLLVM 0 0 0 fname (globalVarsDefs state) (varsStore state)
-  header <- emitHeader rtype fname args
-  entry <- emitEntry args
-  (status, _, bodyInstrs) <- emitBlock body
+  (env, header) <- emitHeader rtype fname args
+  (status, _, bodyInstrs) <- local (const env) $ emitBlock body
   case status of
     Running -> do
       bodyInstrs <- return $ bodyInstrs ++ ["ret void"]
       body <- return $ [if "." `isPrefixOf` instr then instr else "    " ++ instr | instr <- bodyInstrs]
       footer <- return ["}"]
-      return $ unlines $ header ++ entry ++ body ++ footer
+      return $ unlines $ header ++ body ++ footer
     otherwise -> do
       body <- return $ [if "." `isPrefixOf` instr then instr else "    " ++ instr | instr <- bodyInstrs]
       footer <- return ["}"]
-      return $ unlines $ header ++ entry ++ body ++ footer
+      return $ unlines $ header ++ body ++ footer
 
-emitHeader :: TType -> String -> [TArg] -> Result Instructions
-emitHeader rtype fname args =
-  return ["define " ++ (llvmType rtype) ++ " @" ++ fname ++ "(" ++ (emitArguments args) ++ ") {"]
+emitHeader :: TType -> String -> [TArg] -> Result (Env, Instructions)
+emitHeader rtype fname args = do
+  (env, declInstrs, argsInstr) <- emitArguments args
+  entry <- emitEntry args
+  instrs <- return $ ["define " ++ (llvmType rtype) ++ " @" ++ fname ++ "(" ++ argsInstr ++ ") {"] ++ entry ++ declInstrs
+  return (env, instrs)
 
 emitEntry :: [TArg] -> Result Instructions
 emitEntry args = do
@@ -79,22 +81,12 @@ emitStmt (BStmt _ block) = do
 emitStmt (Decl _ _ []) = do
   env <- ask
   return (Running, env, [])
-emitStmt (Decl pos vtype ((NoInit pos2 (Ident vname)):vitems)) = do
-  emitStmt (Decl pos vtype ((Init pos2 (Ident vname) (getDefaultValExpr vtype)):vitems))
-emitStmt (Decl pos vtype ((Init _ (Ident vname) expr):vitems)) = do
-  env <- ask
-  loc <- newloc
-  env' <- return $ Data.Map.insert (Ident vname) loc env
-  state <- get
-
-  blockNum <- getCurrentBlockNum
-  varReg <- return $ "%" ++ vname ++ "." ++ (show blockNum)
+emitStmt (Decl pos vtype ((NoInit pos2 vident):vitems)) = do
+  emitStmt (Decl pos vtype ((Init pos2 vident (getDefaultValExpr vtype)):vitems))
+emitStmt (Decl pos vtype ((Init _ vident expr):vitems)) = do
+  (env', varReg) <- declareVarInternally vident vtype
   declVarInstrs <- return [varReg ++ " = alloca " ++ (llvmType vtype)]
-
-  newstore <- return $ Data.Map.insert loc (vtype, varReg) (varsStore state)
-  put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) newstore
-
-  (_, _, initInstrs) <- local (const env') $ emitStmt (Ass pos (Ident vname) expr)
+  (_, _, initInstrs) <- local (const env') $ emitStmt (Ass pos vident expr)
   (_, env'', declVarsInstrs) <- local (const env') $ emitStmt (Decl pos vtype vitems)
   return (Running, env'', declVarInstrs ++ initInstrs ++ declVarsInstrs)
 emitStmt (Ass _ (Ident vname) expr) = do
@@ -225,13 +217,12 @@ emitStmt (While _ cond body) = do
       jmpToCond <- return $ ["br label %" ++ (init loopCondLabel)]
       jmpToBody <- return $ ["br label %" ++ (init loopBodyLabel)]
 
-      -- is jmp before label necessary / expected?
       instrs <- return $ jmpToCond ++ [loopBodyLabel] ++ loopBodyInstrs ++ jmpToCond ++ [loopCondLabel] ++ condInstrs ++
                          jmpAfterLoop ++ [afterLoopLabel]
       return (Running, env, instrs)
 
 emitExpr :: TExpr -> Result (Instructions, TType, Register)
-emitExpr (EVar _ vident) = do
+emitExpr (EVar pos vident) = do
   env <- ask
   state <- get
   maybeLoc <- return $ Data.Map.lookup vident env
@@ -244,7 +235,7 @@ emitExpr (EVar _ vident) = do
           loadInstrs <- return ["%" ++ (show register) ++ " = load " ++ (llvmType vtype) ++ ", " ++ (llvmType vtype) ++ "* " ++ vreg]
           return (loadInstrs, vtype, "%" ++ (show register))
         Nothing -> throwError "Loc not found"
-    Nothing -> throwError "Undeclared variable in env"
+    Nothing -> throwError $ (show pos) ++ ": Undeclared variable in env"
 emitExpr (ELitInt _ num) = return ([], Int (Just (0,0)), show num)
 emitExpr (ELitTrue _) = return ([], Bool (Just (0,0)), "1")
 emitExpr (ELitFalse _) = return ([], Bool (Just (0,0)), "0")
@@ -306,12 +297,35 @@ emitExpr (EAdd _ expr1 op expr2) = do
       addInstr <- return ["%" ++ (show reg) ++ " = " ++ (getAddOpInstr op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
       return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
 
+emitExpr (ERel _ expr1 op expr2) = do
+  (instrs1, etype, reg1) <- emitExpr expr1
+  (instrs2, _, reg2) <- emitExpr expr2
+  reg <- getNextRegister
+  cmpInstr <- return ["%" ++ (show reg) ++ " = icmp " ++ (showRelOp op) ++ " " ++ (llvmType etype) ++ " " ++ (show reg1) ++ ", " ++ (show reg2)]
+  return (instrs1 ++ instrs2 ++ cmpInstr, Bool (Just (0, 0)), "%" ++ (show reg))
+
+
+
 emitExpr _ = return ([], Int (Just (0, 0)), "0")
 
-emitArguments :: [TArg] -> String
-emitArguments args = intercalate ", " (emitArguments' args) where
-  emitArguments' [] = []
-  emitArguments' ((Arg _ atype (Ident aname)):args) = ((llvmType atype) ++ " %" ++ aname) : (emitArguments' args)
+emitArguments :: [TArg] -> Result (Env, Instructions, String)
+emitArguments args = do
+  (env, declInstrs, llvmArgStrs) <- emitArguments' args [] []
+  llvmArgsStr <- return $ intercalate ", " llvmArgStrs
+  return (env, declInstrs, llvmArgsStr)
+  where
+  emitArguments' [] accDecls accSignature = do
+    env <- ask
+    return (env, reverse accDecls, reverse accSignature)
+  emitArguments' ((Arg pos atype (Ident aname)):args) accDecls accSignature = do
+--     initExpr <- return $ (EVar )
+--     (_, env, declInstr) <- emitStmt (Decl pos atype ((Init pos (Ident aname) initExpr):[]))
+    (env, argReg) <- declareVarInternally (Ident aname) atype
+    declInstr <- return $ argReg ++ " = alloca " ++ (llvmType atype)
+    storeInstr <- return $ "store " ++ (llvmType atype) ++ " %" ++ aname ++ ", " ++ (llvmType atype) ++ "* " ++ argReg
+    declInstrs <- return $ [storeInstr] ++ [declInstr] --first store then decl, because it's reversed after in the end
+    argStr <- return $ (llvmType atype) ++ " %" ++ aname
+    local (const env) $ emitArguments' args (declInstrs ++ accDecls) (argStr : accSignature)
 
 emitParameters :: [TType] -> [String] -> String
 emitParameters ptypes pregs = intercalate ", " (emitParameters' ptypes pregs) where
@@ -369,10 +383,10 @@ putFnTypes [] = do
   env' <- putFn (Ident "printInt") (Void (Just (0, 0)))
   env'' <- local (const env') $ putFn (Ident "printString") (Void (Just (0, 0)))
   env''' <- local (const env'') $ putFn (Ident "error") (Void (Just (0, 0)))
-  env'''' <- local (const env''') $ putFn (Ident "readInt") (Int (Just (0, 0)))
-  env''''' <- local (const env'''') $ putFn (Ident "readString") (Str (Just (0, 0)))
-  env'''''' <- local (const env''''') $ putFn (Ident "__concat") (Str (Just (0, 0)))
-  return env''''''
+  env4 <- local (const env''') $ putFn (Ident "readInt") (Int (Just (0, 0)))
+  env5 <- local (const env4) $ putFn (Ident "readString") (Str (Just (0, 0)))
+  env6 <- local (const env5) $ putFn (Ident "__concat") (Str (Just (0, 0)))
+  return env6
 
 putFnTypes ((FnDef _ rtype fname _ _):stmts) = do
   env' <- putFn fname rtype
@@ -384,7 +398,7 @@ putFn fname fnRtype = do
   loc <- newloc
   env' <- return $ Data.Map.insert fname loc env
   state <- get
-  newstore <- return $ Data.Map.insert loc (fnRtype, "@" ++ (fnName state)) (varsStore state) -- todo $$$
+  newstore <- return $ Data.Map.insert loc (fnRtype, "@" ++ (fnName state)) (varsStore state)
   put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) newstore
   return env'
 
@@ -406,6 +420,39 @@ getMulOpInstr (Div _) = "sdiv"
 getAddOpInstr :: TAddOp -> String
 getAddOpInstr (Plus _) = "add"
 getAddOpInstr (Minus _) = "sub"
+
+showRelOp :: TRelOp -> String
+showRelOp (LTH _) = "slt"
+showRelOp (LE _) = "sle"
+showRelOp (GTH _) = "sgt"
+showRelOp (GE _) = "sge"
+showRelOp (EQU _) = "eq"
+showRelOp (NE _) = "ne"
+
+declareVarInternally :: Ident -> TType -> Result (Env, String)
+declareVarInternally (Ident vname) vtype = do
+    env <- ask
+    loc <- newloc
+    env' <- return $ Data.Map.insert (Ident vname) loc env
+    state <- get
+    blockNum <- getCurrentBlockNum
+    varReg <- return $ "%" ++ vname ++ "." ++ (show blockNum)
+    newstore <- return $ Data.Map.insert loc (vtype, varReg) (varsStore state)
+    put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state) newstore
+    return (env', varReg)
+
+getVarReg :: Ident -> Result (TType, String)
+getVarReg vident = do
+  env <- ask
+  state <- get
+  maybeLoc <- return $ Data.Map.lookup vident env
+  case maybeLoc of
+    (Just loc) -> do
+      maybeVTypeReg <- return $ Data.Map.lookup loc (varsStore state)
+      case maybeVTypeReg of
+        (Just (vtype, vreg)) -> return (vtype, vreg)
+        Nothing -> throwError "Loc not found"
+    Nothing -> throwError $ "Undeclared variable in env " ++ (show vident)
 
 getDefaultValExpr :: TType -> TExpr
 getDefaultValExpr (Int _) = ELitInt (Just (0, 0)) 0

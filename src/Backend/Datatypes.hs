@@ -40,3 +40,4 @@ type TTopDef = TopDef SPos
 type TBlock = Block SPos
 type TMulOp = MulOp SPos
 type TAddOp = AddOp SPos
+type TRelOp = RelOp SPos
