@@ -260,12 +260,12 @@ emitExpr (EApp _ (Ident fname) exprs) = do
     True -> do
       fnCallInstr <- return [[fnCall]]
       instrs' <- return $ instrs ++ fnCallInstr
-      return (foldr (++) [] instrs', Int (Just (0, 0)), "%-1")
+      return (foldr (++) [] instrs', rtype, "%(-1)")
     False -> do
       register <- getNextRegister
       fnCallInstr <- return $ [["%" ++ (show register) ++ " = " ++ fnCall]]
       instrs' <- return $ instrs ++ fnCallInstr
-      return (foldr (++) [] instrs', Int (Just (0, 0)), "%" ++ (show register))
+      return (foldr (++) [] instrs', rtype, "%" ++ (show register))
 emitExpr (Neg pos expr) = emitExpr (EAdd pos (ELitInt pos 0) (Minus pos) expr)
 emitExpr (Not pos bexpr) = do
   (instrs, _, resReg) <- emitExpr bexpr
@@ -296,17 +296,26 @@ emitExpr (EAdd _ expr1 op expr2) = do
     False -> do
       addInstr <- return ["%" ++ (show reg) ++ " = " ++ (getAddOpInstr op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
       return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
-
 emitExpr (ERel _ expr1 op expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
   reg <- getNextRegister
-  cmpInstr <- return ["%" ++ (show reg) ++ " = icmp " ++ (showRelOp op) ++ " " ++ (llvmType etype) ++ " " ++ (show reg1) ++ ", " ++ (show reg2)]
+  cmpInstr <- return ["%" ++ (show reg) ++ " = icmp " ++ (showRelOp op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
   return (instrs1 ++ instrs2 ++ cmpInstr, Bool (Just (0, 0)), "%" ++ (show reg))
-
-
-
-emitExpr _ = return ([], Int (Just (0, 0)), "0")
+emitExpr (EAnd _ expr1 expr2) = do
+  (instrs1, etype, reg1) <- emitExpr expr1
+  -- todo lazy evaluation
+  (instrs2, _, reg2) <- emitExpr expr2
+  reg <- getNextRegister
+  andInstr <- return ["%" ++ (show reg) ++ " = and i1 " ++ reg1 ++ ", " ++ reg2]
+  return (instrs1 ++ instrs2 ++ andInstr, etype, "%" ++ (show reg))
+emitExpr (EOr _ expr1 expr2) = do
+  (instrs1, etype, reg1) <- emitExpr expr1
+  -- todo lazy evaluation
+  (instrs2, _, reg2) <- emitExpr expr2
+  reg <- getNextRegister
+  orInstr <- return ["%" ++ (show reg) ++ " = or i1 " ++ reg1 ++ ", " ++ reg2]
+  return (instrs1 ++ instrs2 ++ orInstr, etype, "%" ++ (show reg))
 
 emitArguments :: [TArg] -> Result (Env, Instructions, String)
 emitArguments args = do
