@@ -86,11 +86,9 @@ emitStmt (Decl pos vtype ((NoInit pos2 vident):vitems)) = do
   emitStmt (Decl pos vtype ((Init pos2 vident (getDefaultValExpr vtype)):vitems))
 emitStmt (Decl pos vtype ((Init _ vident expr):vitems)) = do
   (initInstrs, _, resReg) <- emitExpr expr
---   (vtype, vreg) <- getVar vident
   (env', varReg) <- declareVarInternally vident vtype
   declVarInstrs <- return [varReg ++ " = alloca " ++ (showType vtype)]
   assignInstr <- return ["store " ++ (showType vtype) ++ " " ++ resReg ++ ", " ++ (showType vtype) ++ "* " ++ varReg]
---   (_, _, initInstrs) <- local (const env') $ emitStmt (Ass pos vident expr)
   (_, env'', declVarsInstrs) <- local (const env') $ emitStmt (Decl pos vtype vitems)
   return (Running, env'', declVarInstrs ++ initInstrs ++ assignInstr ++ declVarsInstrs)
 emitStmt (Ass _ vident expr) = do
@@ -166,7 +164,6 @@ emitStmt (CondElse _ cond ifTrueStmt ifFalseStmt) = do
       jmpToCond <- return ["br label %" ++ condLabel]
       jmpAfterStmt <- return $ ["br label %" ++ afterCondLabel]
 
-      -- todo merge instrs with jmp (dont jump if status == terminated)
       ifTrueInstrs' <- appendJmpIfNotTerminated ifTrueStatus ifTrueInstrs jmpAfterStmt
       ifFalseInstrs' <- appendJmpIfNotTerminated ifFalseStatus ifFalseInstrs jmpAfterStmt
 
@@ -221,23 +218,23 @@ emitExpr :: TExpr -> Result (Instructions, TType, Register)
 emitExpr (EVar pos vident) = do
   (vtype, vreg) <- getVar vident
   register <- getNextRegister
-  loadInstrs <- return ["%" ++ (show register) ++ " = load " ++ (showType vtype) ++ ", " ++ (showType vtype) ++ "* " ++ vreg]
-  return (loadInstrs, vtype, "%" ++ (show register))
+  loadInstrs <- return [register ++ " = load " ++ (showType vtype) ++ ", " ++ (showType vtype) ++ "* " ++ vreg]
+  return (loadInstrs, vtype, register)
 emitExpr (ELitInt _ num) = return ([], Int (Just (0,0)), show num)
 emitExpr (ELitTrue _) = return ([], Bool (Just (0,0)), "1")
 emitExpr (ELitFalse _) = return ([], Bool (Just (0,0)), "0")
 emitExpr (EString _ str) = do
   reg <- getNextRegister
   state <- get
-  strReg <- return $ "@.str." ++ (fnName state) ++ "." ++ (show reg)
+  strReg <- return $ "@.str." ++ (fnName state) ++ "." ++ (tail reg)
   -- todo dlaczego stringi maja zawsze wokolo '"' (np. str == "xx")?
   globalVarDef <- return $  strReg ++ " = internal constant ["
                             ++ (show $ (length str) - 1) ++ " x i8] c\"" ++ (tail $ init str) ++ "\\00\""
   put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state)
                   (globalVarDef : (globalVarsDefs state)) (varsStore state) (currentLabel state)
-  instr <- return $ "%" ++ (show reg) ++ " = getelementptr [" ++ (show $ (length str) - 1) ++ " x i8], " ++
+  instr <- return $ reg ++ " = getelementptr [" ++ (show $ (length str) - 1) ++ " x i8], " ++
                     "[" ++ (show $ (length str) - 1) ++ " x i8]* " ++ strReg ++ ", i32 0, i32 0"
-  return ([instr], Str (Just (0, 0)), "%" ++ (show reg))
+  return ([instr], Str (Just (0, 0)), reg)
 emitExpr (EApp _ (Ident fname) exprs) = do
   state <- get
   exprsRes <- mapM emitExpr exprs
@@ -251,71 +248,71 @@ emitExpr (EApp _ (Ident fname) exprs) = do
       return (foldr (++) [] instrs', rtype, "%(-1)")
     False -> do
       register <- getNextRegister
-      fnCallInstr <- return $ [["%" ++ (show register) ++ " = " ++ fnCall]]
+      fnCallInstr <- return $ [[register ++ " = " ++ fnCall]]
       instrs' <- return $ instrs ++ fnCallInstr
-      return (foldr (++) [] instrs', rtype, "%" ++ (show register))
+      return (foldr (++) [] instrs', rtype, register)
 emitExpr (Neg pos expr) = emitExpr (EAdd pos (ELitInt pos 0) (Minus pos) expr)
 emitExpr (Not pos bexpr) = do
   (instrs, _, resReg) <- emitExpr bexpr
   register <- getNextRegister
-  negateInstrs <- return ["%" ++ (show register) ++ " = sub i1 1, " ++ resReg]
-  return (instrs ++ negateInstrs, Bool (Just (0, 0)), "%" ++ (show register))
+  negateInstrs <- return [register ++ " = sub i1 1, " ++ resReg]
+  return (instrs ++ negateInstrs, Bool (Just (0, 0)), register)
 emitExpr (EMul pos expr1 (Mod _) expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
 
   sremReg <- getNextRegister
-  sremInstr <- return ["%" ++ (show sremReg) ++ " = srem " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+  sremInstr <- return [sremReg ++ " = srem " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
   afterRemLabel <- getCurrentLabel
 
   checkSignReg <- getNextRegister
-  checkSign <- return ["%" ++ (show checkSignReg) ++ " = mul " ++ (showType etype) ++ " %" ++ (show sremReg) ++ ", " ++ reg2]
+  checkSign <- return [checkSignReg ++ " = mul " ++ (showType etype) ++ " " ++ sremReg ++ ", " ++ reg2]
 
   cmpReg <- getNextRegister
-  cmpInstr <- return ["%" ++ (show cmpReg) ++ " = icmp slt i32 %" ++ (show checkSignReg) ++ ", 0"]
+  cmpInstr <- return [cmpReg ++ " = icmp slt i32 " ++ checkSignReg ++ ", 0"]
   negativeRemainderLabel <- updateCurrentLabel ".opposite.remainder"
   addToRemReg <- getNextRegister
-  addToRemInstr <- return ["%" ++ (show addToRemReg) ++ " = add i32 %" ++ (show sremReg) ++ ", " ++ reg2]
+  addToRemInstr <- return [addToRemReg ++ " = add i32 " ++ sremReg ++ ", " ++ reg2]
 
   resLabel <- updateCurrentLabel ".mod.result"
   resReg <- getNextRegister
   jmpToRes <- return ["br label %" ++ resLabel]
-  jmpAfterCmp <- return ["br i1 %" ++ (show cmpReg) ++ ", label %" ++ negativeRemainderLabel ++ ", label %" ++ resLabel]
-  resInstr <- return ["%" ++ (show resReg) ++ " = phi i32 [ %" ++ (show sremReg) ++ ", %" ++ afterRemLabel ++ " ], " ++
-                      "[ %" ++ (show addToRemReg) ++ ", %" ++ negativeRemainderLabel ++ " ]"]
+  jmpAfterCmp <- return ["br i1 " ++ cmpReg ++ ", label %" ++ negativeRemainderLabel ++ ", label %" ++ resLabel]
+  resInstr <- return [resReg ++ " = phi i32 [ " ++ sremReg ++ ", %" ++ afterRemLabel ++ " ], " ++
+                      "[ " ++ addToRemReg ++ ", %" ++ negativeRemainderLabel ++ " ]"]
 
   instrs <- return $ instrs1 ++ instrs2 ++ sremInstr ++ checkSign ++ cmpInstr ++ jmpAfterCmp ++
                      [negativeRemainderLabel ++ ":"] ++ addToRemInstr ++ jmpToRes ++
                      [resLabel ++ ":"] ++ resInstr
-  return (instrs, etype, "%" ++ (show resReg))
+  return (instrs, etype, resReg)
 emitExpr (EMul _ expr1 op expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
   reg <- getNextRegister
-  mulInstr <- return ["%" ++ (show reg) ++ " = " ++ (showMulOpInstr op) ++ " " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
-  return (instrs1 ++ instrs2 ++ mulInstr, etype, "%" ++ (show reg))
+  mulInstr <- return [reg ++ " = " ++ (showMulOpInstr op) ++ " " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+  return (instrs1 ++ instrs2 ++ mulInstr, etype, reg)
 emitExpr (EAdd _ expr1 op expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
   reg <- getNextRegister
   case (etype == (Str (Just (0, 0)))) of
     True -> do
-      addInstr <- return ["%" ++ (show reg) ++ " = call i8* @__concat(i8* " ++ reg1 ++ ", i8* " ++ reg2 ++ ")"]
-      return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
+      addInstr <- return [reg ++ " = call i8* @__concat(i8* " ++ reg1 ++ ", i8* " ++ reg2 ++ ")"]
+      return (instrs1 ++ instrs2 ++ addInstr, etype, reg)
     False -> do
-      addInstr <- return ["%" ++ (show reg) ++ " = " ++ (showAddOpInstr op) ++ " " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
-      return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
+      addInstr <- return [reg ++ " = " ++ (showAddOpInstr op) ++ " " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+      return (instrs1 ++ instrs2 ++ addInstr, etype, reg)
 emitExpr (ERel _ expr1 op expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
   reg <- getNextRegister
-  cmpInstr <- return ["%" ++ (show reg) ++ " = icmp " ++ (showRelOp op) ++ " " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
-  return (instrs1 ++ instrs2 ++ cmpInstr, Bool (Just (0, 0)), "%" ++ (show reg))
+  cmpInstr <- return [reg ++ " = icmp " ++ (showRelOp op) ++ " " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+  return (instrs1 ++ instrs2 ++ cmpInstr, Bool (Just (0, 0)), reg)
 emitExpr (EAnd _ expr1 expr2) = do
   leftExprLabel <- updateCurrentLabel ".land.left.expr"
   (instrs1, etype, reg1) <- emitExpr expr1
   regCond <- getNextRegister
-  condJmpRightExpr <- return ["%" ++ (show regCond) ++ " = icmp eq i1 " ++ reg1 ++ ", 1"]
+  condJmpRightExpr <- return [regCond ++ " = icmp eq i1 " ++ reg1 ++ ", 1"]
   labelAfterLeftExprEmit <- getCurrentLabel
 
   rightExprLabel <- updateCurrentLabel ".land.right.expr"
@@ -323,24 +320,24 @@ emitExpr (EAnd _ expr1 expr2) = do
   labelAfterRightExprEmit <- getCurrentLabel
 
   landAfterLabel <- updateCurrentLabel ".land.after"
-  jmpRightExpr <- return $ ["br i1 %" ++ (show regCond) ++ ", label %" ++ rightExprLabel ++ ", label %" ++ landAfterLabel]
+  jmpRightExpr <- return $ ["br i1 " ++ regCond ++ ", label %" ++ rightExprLabel ++ ", label %" ++ landAfterLabel]
   jmpLeftExpr <- return ["br label %" ++ leftExprLabel]
   jmpDone <- return ["br label %" ++ landAfterLabel]
 
 
   regRes <- getNextRegister
-  resInstr <- return ["%" ++ (show regRes) ++ " = phi i1 [ 0, %" ++ labelAfterLeftExprEmit ++ " ], " ++
+  resInstr <- return [regRes ++ " = phi i1 [ 0, %" ++ labelAfterLeftExprEmit ++ " ], " ++
                       "[ " ++ reg2 ++ ", %" ++ labelAfterRightExprEmit ++ " ]"]
 
   instrs <- return $ jmpLeftExpr ++ [leftExprLabel ++ ":"] ++ instrs1 ++ condJmpRightExpr ++
                      jmpRightExpr ++ [rightExprLabel ++ ":"] ++ instrs2 ++
                      jmpDone ++ [landAfterLabel ++ ":"] ++ resInstr
-  return (instrs, etype, "%" ++ (show regRes))
+  return (instrs, etype, regRes)
 emitExpr (EOr _ expr1 expr2) = do
   leftExprLabel <- updateCurrentLabel ".lor.left.expr"
   (instrs1, etype, reg1) <- emitExpr expr1
   regCond <- getNextRegister
-  condJmpRightExpr <- return ["%" ++ (show regCond) ++ " = icmp eq i1 " ++ reg1 ++ ", 1"]
+  condJmpRightExpr <- return [regCond ++ " = icmp eq i1 " ++ reg1 ++ ", 1"]
   labelAfterLeftExprEmit <- getCurrentLabel
 
 
@@ -349,18 +346,18 @@ emitExpr (EOr _ expr1 expr2) = do
   labelAfterRightExprEmit <- getCurrentLabel
 
   lorAfterLabel <- updateCurrentLabel ".lor.after"
-  jmpRightExpr <- return $ ["br i1 %" ++ (show regCond) ++ ", label %" ++ lorAfterLabel ++ ", label %" ++ rightExprLabel]
+  jmpRightExpr <- return $ ["br i1 " ++ regCond ++ ", label %" ++ lorAfterLabel ++ ", label %" ++ rightExprLabel]
   jmpLeftExpr <- return ["br label %" ++ leftExprLabel]
   jmpDone <- return ["br label %" ++ lorAfterLabel]
 
   regRes <- getNextRegister
-  resInstr <- return ["%" ++ (show regRes) ++ " = phi i1 [ 1, %" ++ labelAfterLeftExprEmit ++ " ], " ++
+  resInstr <- return [regRes ++ " = phi i1 [ 1, %" ++ labelAfterLeftExprEmit ++ " ], " ++
                       "[ " ++ reg2 ++ ", %" ++ labelAfterRightExprEmit ++ " ]"]
 
   instrs <- return $ jmpLeftExpr ++ [leftExprLabel ++ ":"] ++ instrs1 ++ condJmpRightExpr ++
                      jmpRightExpr ++ [rightExprLabel ++ ":"] ++ instrs2 ++
                      jmpDone ++ [lorAfterLabel ++ ":"] ++ resInstr
-  return (instrs, etype, "%" ++ (show regRes))
+  return (instrs, etype, regRes)
 
 emitArguments :: [TArg] -> Result (Env, Instructions, String)
 emitArguments args = do
@@ -389,13 +386,13 @@ getCurrentRegister = do
   state <- get
   return $ nextRegister state
 
-getNextRegister :: Result Integer
+getNextRegister :: Result String
 getNextRegister = do
   state <- get
   newReg <- return $ nextRegister state
   put $ StateLLVM (newReg + 1) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state)
                   (varsStore state) (currentLabel state)
-  return newReg
+  return $ "%" ++ (show newReg)
 
 getCurrentBlockNum :: Result Integer
 getCurrentBlockNum = do
