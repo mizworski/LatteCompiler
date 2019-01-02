@@ -89,20 +89,12 @@ emitStmt (Decl pos vtype ((Init _ vident expr):vitems)) = do
   (_, _, initInstrs) <- local (const env') $ emitStmt (Ass pos vident expr)
   (_, env'', declVarsInstrs) <- local (const env') $ emitStmt (Decl pos vtype vitems)
   return (Running, env'', declVarInstrs ++ initInstrs ++ declVarsInstrs)
-emitStmt (Ass _ (Ident vname) expr) = do
-  (instrs, _, resReg) <- emitExpr expr
+emitStmt (Ass _ vident expr) = do
   env <- ask
-  state <- get
-  maybeLoc <- return $ Data.Map.lookup (Ident vname) env
-  case maybeLoc of
-    (Just loc) -> do
-      maybeVTypeReg <- return $ Data.Map.lookup loc (varsStore state)
-      case maybeVTypeReg of
-        (Just (vtype, vreg)) -> do
-          assignInstr <- return ["store " ++ (llvmType vtype) ++ " " ++ resReg ++ ", " ++ (llvmType vtype) ++ "* " ++ vreg]
-          return (Running, env, instrs ++ assignInstr)
-        Nothing -> throwError "Loc not found"
-    Nothing -> throwError "Undeclared variable in env"
+  (instrs, _, resReg) <- emitExpr expr
+  (vtype, vreg) <- getVar vident
+  assignInstr <- return ["store " ++ (llvmType vtype) ++ " " ++ resReg ++ ", " ++ (llvmType vtype) ++ "* " ++ vreg]
+  return (Running, env, instrs ++ assignInstr)
 emitStmt (Incr pos vident) = do
   addOneExpr <- return (EAdd pos (EVar pos vident) (Plus pos) (ELitInt pos 1))
   emitStmt (Ass pos vident addOneExpr)
@@ -218,19 +210,10 @@ emitStmt (While _ cond body) = do
 
 emitExpr :: TExpr -> Result (Instructions, TType, Register)
 emitExpr (EVar pos vident) = do
-  env <- ask
-  state <- get
-  maybeLoc <- return $ Data.Map.lookup vident env
-  case maybeLoc of
-    (Just loc) -> do
-      maybeVTypeReg <- return $ Data.Map.lookup loc (varsStore state)
-      case maybeVTypeReg of
-        (Just (vtype, vreg)) -> do
-          register <- getNextRegister
-          loadInstrs <- return ["%" ++ (show register) ++ " = load " ++ (llvmType vtype) ++ ", " ++ (llvmType vtype) ++ "* " ++ vreg]
-          return (loadInstrs, vtype, "%" ++ (show register))
-        Nothing -> throwError "Loc not found"
-    Nothing -> throwError $ (show pos) ++ ": Undeclared variable in env"
+  (vtype, vreg) <- getVar vident
+  register <- getNextRegister
+  loadInstrs <- return ["%" ++ (show register) ++ " = load " ++ (llvmType vtype) ++ ", " ++ (llvmType vtype) ++ "* " ++ vreg]
+  return (loadInstrs, vtype, "%" ++ (show register))
 emitExpr (ELitInt _ num) = return ([], Int (Just (0,0)), show num)
 emitExpr (ELitTrue _) = return ([], Bool (Just (0,0)), "1")
 emitExpr (ELitFalse _) = return ([], Bool (Just (0,0)), "0")
@@ -238,6 +221,7 @@ emitExpr (EString _ str) = do
   reg <- getNextRegister
   state <- get
   strReg <- return $ "@.str." ++ (fnName state) ++ "." ++ (show reg)
+  -- todo dlaczego stringi maja zawsze wokolo '"' (np. str == "xx")?
   globalVarDef <- return $  strReg ++ " = internal constant ["
                             ++ (show $ (length str) - 1) ++ " x i8] c\"" ++ (tail $ init str) ++ "\\00\""
   put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state)
@@ -249,7 +233,7 @@ emitExpr (EApp _ (Ident fname) exprs) = do
   state <- get
   exprsRes <- mapM emitExpr exprs
   (instrs, ptypes, pregs) <- return $ unzip3 exprsRes
-  rtype <- getVarType (Ident fname)
+  (rtype, _) <- getVar (Ident fname)
   fnCall <- return $ "call " ++ (llvmType rtype) ++ " @" ++ fname ++ "(" ++ (emitParameters ptypes pregs) ++ ")"
   case (rtype == (Void (Just (0,0)))) of
     True -> do
@@ -400,18 +384,6 @@ incrementBlockNum = do
   put $ StateLLVM (nextRegister state) (nextLabel state) ((nextBlock state) + 1) (fnName state) (globalVarsDefs state)
                   (varsStore state) (currentLabel state)
 
-getVarType:: Ident -> Result TType
-getVarType vname = do
-  env <- ask
-  maybeLoc <- return $ Data.Map.lookup vname env
-  case maybeLoc of
-    (Just loc) -> do
-      state <- get
-      case (Data.Map.lookup loc (varsStore state)) of
-        (Just (rtype, _)) -> return rtype
-        Nothing -> throwError "Value under loc was not found in store"
-    Nothing -> throwError "Loc not found for variable"
-
 putFnTypes :: [TTopDef] -> Result Env
 putFnTypes [] = do
   env' <- putFn (Ident "printInt") (Void (Just (0, 0)))
@@ -477,8 +449,8 @@ declareVarInternally (Ident vname) vtype = do
                     newstore (currentLabel state)
     return (env', varReg)
 
-getVarReg :: Ident -> Result (TType, String)
-getVarReg vident = do
+getVar :: Ident -> Result (TType, String)
+getVar vident = do
   env <- ask
   state <- get
   maybeLoc <- return $ Data.Map.lookup vident env
@@ -506,7 +478,7 @@ getCurrentLabel = do
 
 getDefaultValExpr :: TType -> TExpr
 getDefaultValExpr (Int _) = ELitInt (Just (0, 0)) 0
-getDefaultValExpr (Str _) = EString (Just (0, 0)) ""
+getDefaultValExpr (Str _) = EString (Just (0, 0)) "\"\""
 getDefaultValExpr (Bool _) = ELitFalse (Just (0, 0))
 
 simplifyConstExpr :: TExpr -> Maybe Bool
