@@ -323,12 +323,30 @@ emitExpr (EAnd _ expr1 expr2) = do
                      jmpDone ++ [landAfterLabel ++ ":"] ++ resInstr
   return (instrs, etype, "%" ++ (show regRes))
 emitExpr (EOr _ expr1 expr2) = do
+  leftExprLabel <- updateCurrentLabel ".lor.left.expr"
   (instrs1, etype, reg1) <- emitExpr expr1
-  -- todo lazy evaluation
+  regCond <- getNextRegister
+  condJmpRightExpr <- return ["%" ++ (show regCond) ++ " = icmp eq i1 " ++ reg1 ++ ", 1"]
+  labelAfterLeftExprEmit <- getCurrentLabel
+
+
+  rightExprLabel <- updateCurrentLabel ".lor.right.expr"
   (instrs2, _, reg2) <- emitExpr expr2
-  reg <- getNextRegister
-  orInstr <- return ["%" ++ (show reg) ++ " = or i1 " ++ reg1 ++ ", " ++ reg2]
-  return (instrs1 ++ instrs2 ++ orInstr, etype, "%" ++ (show reg))
+  labelAfterRightExprEmit <- getCurrentLabel
+
+  lorAfterLabel <- updateCurrentLabel ".lor.after"
+  jmpRightExpr <- return $ ["br i1 %" ++ (show regCond) ++ ", label %" ++ lorAfterLabel ++ ", label %" ++ rightExprLabel]
+  jmpLeftExpr <- return ["br label %" ++ leftExprLabel]
+  jmpDone <- return ["br label %" ++ lorAfterLabel]
+
+  regRes <- getNextRegister
+  resInstr <- return ["%" ++ (show regRes) ++ " = phi i1 [ 1, %" ++ labelAfterLeftExprEmit ++ " ], " ++
+                      "[ " ++ reg2 ++ ", %" ++ labelAfterRightExprEmit ++ " ]"]
+
+  instrs <- return $ jmpLeftExpr ++ [leftExprLabel ++ ":"] ++ instrs1 ++ condJmpRightExpr ++
+                     jmpRightExpr ++ [rightExprLabel ++ ":"] ++ instrs2 ++
+                     jmpDone ++ [lorAfterLabel ++ ":"] ++ resInstr
+  return (instrs, etype, "%" ++ (show regRes))
 
 emitArguments :: [TArg] -> Result (Env, Instructions, String)
 emitArguments args = do
