@@ -31,7 +31,6 @@ compileToLLVM inputFilename outputFilename = do
           hPutStrLn stderr $ inputFilename ++ errMsg
           exitWith (ExitFailure 42)
         otherwise -> do
-          -- semantic analysis passed
           hPutStrLn stderr "OK"
 --           ir <- middleEnd ir
           maybeRes <- runExceptT $ runReaderT (runStateT (emitProgram ir) initialState) Data.Map.empty
@@ -46,7 +45,9 @@ compileToLLVM inputFilename outputFilename = do
               return ()
     (Bad errMsg) -> do
       -- parser error
-      putStrLn $ inputFilename ++ errMsg
+      hPutStrLn stderr "ERROR"
+      hPutStrLn stderr $ inputFilename ++ errMsg
+      exitWith (ExitFailure 42)
 
 
 main :: IO()

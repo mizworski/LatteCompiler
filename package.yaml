@@ -31,7 +31,7 @@ library:
   source-dirs: src
 
 executables:
-  latc_x86_64:
+  latc_llvm:
     main:                Main.hs
     source-dirs:         app
     ghc-options:
