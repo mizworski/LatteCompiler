@@ -48,7 +48,7 @@ emitHeader :: TType -> String -> [TArg] -> Result (Env, Instructions)
 emitHeader rtype fname args = do
   (env, declInstrs, argsInstr) <- emitArguments args
   entry <- emitEntry args
-  instrs <- return $ ["define " ++ (llvmType rtype) ++ " @" ++ fname ++ "(" ++ argsInstr ++ ") {"] ++ entry ++ declInstrs
+  instrs <- return $ ["define " ++ (showType rtype) ++ " @" ++ fname ++ "(" ++ argsInstr ++ ") {"] ++ entry ++ declInstrs
   return (env, instrs)
 
 emitEntry :: [TArg] -> Result Instructions
@@ -88,8 +88,8 @@ emitStmt (Decl pos vtype ((Init _ vident expr):vitems)) = do
   (initInstrs, _, resReg) <- emitExpr expr
 --   (vtype, vreg) <- getVar vident
   (env', varReg) <- declareVarInternally vident vtype
-  declVarInstrs <- return [varReg ++ " = alloca " ++ (llvmType vtype)]
-  assignInstr <- return ["store " ++ (llvmType vtype) ++ " " ++ resReg ++ ", " ++ (llvmType vtype) ++ "* " ++ varReg]
+  declVarInstrs <- return [varReg ++ " = alloca " ++ (showType vtype)]
+  assignInstr <- return ["store " ++ (showType vtype) ++ " " ++ resReg ++ ", " ++ (showType vtype) ++ "* " ++ varReg]
 --   (_, _, initInstrs) <- local (const env') $ emitStmt (Ass pos vident expr)
   (_, env'', declVarsInstrs) <- local (const env') $ emitStmt (Decl pos vtype vitems)
   return (Running, env'', declVarInstrs ++ initInstrs ++ assignInstr ++ declVarsInstrs)
@@ -97,7 +97,7 @@ emitStmt (Ass _ vident expr) = do
   env <- ask
   (instrs, _, resReg) <- emitExpr expr
   (vtype, vreg) <- getVar vident
-  assignInstr <- return ["store " ++ (llvmType vtype) ++ " " ++ resReg ++ ", " ++ (llvmType vtype) ++ "* " ++ vreg]
+  assignInstr <- return ["store " ++ (showType vtype) ++ " " ++ resReg ++ ", " ++ (showType vtype) ++ "* " ++ vreg]
   return (Running, env, instrs ++ assignInstr)
 emitStmt (Incr pos vident) = do
   addOneExpr <- return (EAdd pos (EVar pos vident) (Plus pos) (ELitInt pos 1))
@@ -113,7 +113,7 @@ emitStmt (SExp _ expr) = do
 emitStmt (Ret _ expr) = do
   env <- ask
   (instructions, rtype, res) <- emitExpr expr
-  return (Terminated, env, instructions ++ ["ret " ++ (llvmType rtype) ++ " " ++ res])
+  return (Terminated, env, instructions ++ ["ret " ++ (showType rtype) ++ " " ++ res])
 emitStmt (VRet _) = do
   env <- ask
   return (Terminated, env, ["ret void"])
@@ -221,7 +221,7 @@ emitExpr :: TExpr -> Result (Instructions, TType, Register)
 emitExpr (EVar pos vident) = do
   (vtype, vreg) <- getVar vident
   register <- getNextRegister
-  loadInstrs <- return ["%" ++ (show register) ++ " = load " ++ (llvmType vtype) ++ ", " ++ (llvmType vtype) ++ "* " ++ vreg]
+  loadInstrs <- return ["%" ++ (show register) ++ " = load " ++ (showType vtype) ++ ", " ++ (showType vtype) ++ "* " ++ vreg]
   return (loadInstrs, vtype, "%" ++ (show register))
 emitExpr (ELitInt _ num) = return ([], Int (Just (0,0)), show num)
 emitExpr (ELitTrue _) = return ([], Bool (Just (0,0)), "1")
@@ -243,7 +243,7 @@ emitExpr (EApp _ (Ident fname) exprs) = do
   exprsRes <- mapM emitExpr exprs
   (instrs, ptypes, pregs) <- return $ unzip3 exprsRes
   (rtype, _) <- getVar (Ident fname)
-  fnCall <- return $ "call " ++ (llvmType rtype) ++ " @" ++ fname ++ "(" ++ (emitParameters ptypes pregs) ++ ")"
+  fnCall <- return $ "call " ++ (showType rtype) ++ " @" ++ fname ++ "(" ++ (emitParameters ptypes pregs) ++ ")"
   case (rtype == (Void (Just (0,0)))) of
     True -> do
       fnCallInstr <- return [[fnCall]]
@@ -260,18 +260,39 @@ emitExpr (Not pos bexpr) = do
   register <- getNextRegister
   negateInstrs <- return ["%" ++ (show register) ++ " = sub i1 1, " ++ resReg]
   return (instrs ++ negateInstrs, Bool (Just (0, 0)), "%" ++ (show register))
-emitExpr (EMul _ expr1 (Mod _) expr2) = do
+emitExpr (EMul pos expr1 (Mod _) expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
-  reg <- getNextRegister
-  -- todo change remainder to modulo
-  mulInstr <- return ["%" ++ (show reg) ++ " = srem " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
-  return (instrs1 ++ instrs2 ++ mulInstr, etype, "%" ++ (show reg))
+
+  sremReg <- getNextRegister
+  sremInstr <- return ["%" ++ (show sremReg) ++ " = srem " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+  afterRemLabel <- getCurrentLabel
+
+  checkSignReg <- getNextRegister
+  checkSign <- return ["%" ++ (show checkSignReg) ++ " = mul " ++ (showType etype) ++ " %" ++ (show sremReg) ++ ", " ++ reg2]
+
+  cmpReg <- getNextRegister
+  cmpInstr <- return ["%" ++ (show cmpReg) ++ " = icmp slt i32 %" ++ (show checkSignReg) ++ ", 0"]
+  negativeRemainderLabel <- updateCurrentLabel ".opposite.remainder"
+  addToRemReg <- getNextRegister
+  addToRemInstr <- return ["%" ++ (show addToRemReg) ++ " = add i32 %" ++ (show sremReg) ++ ", " ++ reg2]
+
+  resLabel <- updateCurrentLabel ".mod.result"
+  resReg <- getNextRegister
+  jmpToRes <- return ["br label %" ++ resLabel]
+  jmpAfterCmp <- return ["br i1 %" ++ (show cmpReg) ++ ", label %" ++ negativeRemainderLabel ++ ", label %" ++ resLabel]
+  resInstr <- return ["%" ++ (show resReg) ++ " = phi i32 [ %" ++ (show sremReg) ++ ", %" ++ afterRemLabel ++ " ], " ++
+                      "[ %" ++ (show addToRemReg) ++ ", %" ++ negativeRemainderLabel ++ " ]"]
+
+  instrs <- return $ instrs1 ++ instrs2 ++ sremInstr ++ checkSign ++ cmpInstr ++ jmpAfterCmp ++
+                     [negativeRemainderLabel ++ ":"] ++ addToRemInstr ++ jmpToRes ++
+                     [resLabel ++ ":"] ++ resInstr
+  return (instrs, etype, "%" ++ (show resReg))
 emitExpr (EMul _ expr1 op expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
   reg <- getNextRegister
-  mulInstr <- return ["%" ++ (show reg) ++ " = " ++ (getMulOpInstr op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+  mulInstr <- return ["%" ++ (show reg) ++ " = " ++ (showMulOpInstr op) ++ " " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
   return (instrs1 ++ instrs2 ++ mulInstr, etype, "%" ++ (show reg))
 emitExpr (EAdd _ expr1 op expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
@@ -282,13 +303,13 @@ emitExpr (EAdd _ expr1 op expr2) = do
       addInstr <- return ["%" ++ (show reg) ++ " = call i8* @__concat(i8* " ++ reg1 ++ ", i8* " ++ reg2 ++ ")"]
       return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
     False -> do
-      addInstr <- return ["%" ++ (show reg) ++ " = " ++ (getAddOpInstr op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+      addInstr <- return ["%" ++ (show reg) ++ " = " ++ (showAddOpInstr op) ++ " " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
       return (instrs1 ++ instrs2 ++ addInstr, etype, "%" ++ (show reg))
 emitExpr (ERel _ expr1 op expr2) = do
   (instrs1, etype, reg1) <- emitExpr expr1
   (instrs2, _, reg2) <- emitExpr expr2
   reg <- getNextRegister
-  cmpInstr <- return ["%" ++ (show reg) ++ " = icmp " ++ (showRelOp op) ++ " " ++ (llvmType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
+  cmpInstr <- return ["%" ++ (show reg) ++ " = icmp " ++ (showRelOp op) ++ " " ++ (showType etype) ++ " " ++ reg1 ++ ", " ++ reg2]
   return (instrs1 ++ instrs2 ++ cmpInstr, Bool (Just (0, 0)), "%" ++ (show reg))
 emitExpr (EAnd _ expr1 expr2) = do
   leftExprLabel <- updateCurrentLabel ".land.left.expr"
@@ -351,19 +372,17 @@ emitArguments args = do
     env <- ask
     return (env, reverse accDecls, reverse accSignature)
   emitArguments' ((Arg pos atype (Ident aname)):args) accDecls accSignature = do
---     initExpr <- return $ (EVar )
---     (_, env, declInstr) <- emitStmt (Decl pos atype ((Init pos (Ident aname) initExpr):[]))
     (env, argReg) <- declareVarInternally (Ident aname) atype
-    declInstr <- return $ argReg ++ " = alloca " ++ (llvmType atype)
-    storeInstr <- return $ "store " ++ (llvmType atype) ++ " %" ++ aname ++ ", " ++ (llvmType atype) ++ "* " ++ argReg
+    declInstr <- return $ argReg ++ " = alloca " ++ (showType atype)
+    storeInstr <- return $ "store " ++ (showType atype) ++ " %" ++ aname ++ ", " ++ (showType atype) ++ "* " ++ argReg
     declInstrs <- return $ [storeInstr] ++ [declInstr] --first store then decl, because it's reversed after in the end
-    argStr <- return $ (llvmType atype) ++ " %" ++ aname
+    argStr <- return $ (showType atype) ++ " %" ++ aname
     local (const env) $ emitArguments' args (declInstrs ++ accDecls) (argStr : accSignature)
 
 emitParameters :: [TType] -> [String] -> String
 emitParameters ptypes pregs = intercalate ", " (emitParameters' ptypes pregs) where
   emitParameters' [] [] = []
-  emitParameters' (ptype:ptypes) (preg:pregs) = ((llvmType ptype) ++ " " ++ preg) : (emitParameters' ptypes pregs)
+  emitParameters' (ptype:ptypes) (preg:pregs) = ((showType ptype) ++ " " ++ preg) : (emitParameters' ptypes pregs)
 
 getCurrentRegister :: Result Integer
 getCurrentRegister = do
@@ -419,19 +438,19 @@ newloc = do
   state <- get
   return $ Data.Map.size (varsStore state)
 
-llvmType :: TType -> String
-llvmType (Int _) = "i32"
-llvmType (Str _) = "i8*"
-llvmType (Bool _) = "i1"
-llvmType (Void _) = "void"
+showType :: TType -> String
+showType (Int _) = "i32"
+showType (Str _) = "i8*"
+showType (Bool _) = "i1"
+showType (Void _) = "void"
 
-getMulOpInstr :: TMulOp -> String
-getMulOpInstr (Times _) = "mul"
-getMulOpInstr (Div _) = "sdiv"
+showMulOpInstr :: TMulOp -> String
+showMulOpInstr (Times _) = "mul"
+showMulOpInstr (Div _) = "sdiv"
 
-getAddOpInstr :: TAddOp -> String
-getAddOpInstr (Plus _) = "add"
-getAddOpInstr (Minus _) = "sub"
+showAddOpInstr :: TAddOp -> String
+showAddOpInstr (Plus _) = "add"
+showAddOpInstr (Minus _) = "sub"
 
 showRelOp :: TRelOp -> String
 showRelOp (LTH _) = "slt"
