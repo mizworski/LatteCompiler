@@ -386,7 +386,7 @@ getCurrentRegister = do
   state <- get
   return $ nextRegister state
 
-getNextRegister :: Result String
+getNextRegister :: Result Register
 getNextRegister = do
   state <- get
   newReg <- return $ nextRegister state
