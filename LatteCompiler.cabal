@@ -1,0 +1,88 @@
+-- This file has been generated from package.yaml by hpack version 0.28.2.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: 4183db653ae2edb27770097d514e42aea3c6def602282b73115a21848b5c12b7
+
+name:           LatteCompiler
+version:        0.1.0.0
+description:    Please see the README on GitHub at <https://github.com/mizworski/LatteCompiler#readme>
+homepage:       https://github.com/mizworski/LatteCompiler#readme
+bug-reports:    https://github.com/mizworski/LatteCompiler/issues
+author:         Michal Izworski
+maintainer:     m.izworski7@gmail.com
+copyright:      2018 Michal Izworski
+license:        BSD3
+license-file:   LICENSE
+build-type:     Simple
+cabal-version:  >= 1.10
+extra-source-files:
+    ChangeLog.md
+    README.md
+
+source-repository head
+  type: git
+  location: https://github.com/mizworski/LatteCompiler
+
+library
+  exposed-modules:
+      Backend.CodeGeneration
+      Backend.Datatypes
+      Frontend.AbsLatte
+      Frontend.Datatypes
+      Frontend.ErrM
+      Frontend.LexLatte
+      Frontend.ParLatte
+      Frontend.PrintLatte
+      Frontend.SemanticAnalysis
+      Frontend.SkelLatte
+  other-modules:
+      Paths_LatteCompiler
+  hs-source-dirs:
+      src
+  build-depends:
+      array
+    , base >=4.7 && <5
+    , containers
+    , filepath
+    , mtl
+    , process
+  default-language: Haskell2010
+
+executable latc_llvm
+  main-is: Main.hs
+  other-modules:
+      Paths_LatteCompiler
+  hs-source-dirs:
+      app
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      LatteCompiler
+    , array
+    , base >=4.7 && <5
+    , containers
+    , filepath
+    , mtl
+    , process
+  default-language: Haskell2010
+
+test-suite LatteCompiler-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_LatteCompiler
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      LatteCompiler
+    , array
+    , base >=4.7 && <5
+    , containers
+    , directory
+    , filepath
+    , mtl
+    , process
+    , tasty
+    , tasty-hunit
+  default-language: Haskell2010

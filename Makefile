@@ -1,27 +1,4 @@
-default: build
-
-install-deps:
-	cabal update; \
-	cabal install mtl
-
-mimuw:
-	wget https://www.stackage.org/stack/linux-x86_64-static -O stack.tgz
-	tar xvvf stack.tgz
-	mv stack-*/stack stack
-	rm -rf stack.tgz stack-*
-
-	./stack build
-	./stack install --local-bin-path .
-
-stack-mimuw:
-	wget https://www.stackage.org/stack/linux-x86_64-static -O stack.tgz
-	tar xvvf stack.tgz
-	mv stack-*/stack stack
-	rm -rf stack.tgz stack-*
-
-build-mimuw:
-	cabal build
-	cp ~/.cabal/bin/latc_x86_64 .
+default: build-mimuw
 
 build-bnfc:
 	stack build BNFC; \
@@ -35,9 +12,10 @@ clean-bnfc:
 	rm src/Frontend/ParLatte.y; \
 	rm src/Frontend/TestLatte.hs; \
 
-build-stack:
-	stack setup 8.2.2; \
-	stack build;
+build-mimuw:
+	cabal update; \
+	cabal build; \
+	cp dist/build/latc_llvm/latc_llvm .;
 
 build:
 	stack build

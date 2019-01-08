@@ -1,6 +1,4 @@
 .stack-work/
-LatteCompiler.cabal
-*~
 .idea
 .dist
 .stack-work
