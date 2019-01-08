@@ -230,7 +230,14 @@ checkType (EVar pos ident) = do
       -- change pos from where var was declared to where it is called
       return $ changePos vtype pos
 
-checkType (ELitInt pos _) = return $ Int pos
+checkType (ELitInt pos num) = do
+  case (num > 2147483647) of
+    True -> throwError $ tokenPos pos ++ " value larger than MAX_INT"
+    otherwise -> do
+      case (num < -2147483648) of
+        True -> throwError $ tokenPos pos ++ " value lower than MIN_INT"
+        otherwise -> return $ Int pos
+
 checkType (ELitTrue pos) = return $ Bool pos
 checkType (ELitFalse pos) = return $ Bool pos
 checkType (EApp pos ident args) = do
