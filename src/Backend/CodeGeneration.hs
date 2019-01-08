@@ -48,7 +48,8 @@ emitHeader :: TType -> String -> [TArg] -> Result (Env, Instructions)
 emitHeader rtype fname args = do
   (env, declInstrs, argsInstr) <- emitArguments args
   entry <- emitEntry args
-  instrs <- return $ ["define " ++ (showType rtype) ++ " @" ++ fname ++ "(" ++ argsInstr ++ ") {"] ++ entry ++ declInstrs
+  declInstrs' <- return ["    " ++ instr | instr <- declInstrs]
+  instrs <- return $ ["define " ++ (showType rtype) ++ " @" ++ fname ++ "(" ++ argsInstr ++ ") {"] ++ entry ++ declInstrs'
   return (env, instrs)
 
 emitEntry :: [TArg] -> Result Instructions
