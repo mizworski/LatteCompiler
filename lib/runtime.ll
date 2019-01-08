@@ -1,5 +1,5 @@
 @dnl = internal constant [4 x i8] c"%d\0A\00"
-@err = internal constant [14 x i8] c"RUNTIME ERROR\00"
+@err = internal constant [14 x i8] c"runtime error\00"
 
 declare i32 @printf(i8*, ...)
 declare i32 @scanf(i8*, ...)
