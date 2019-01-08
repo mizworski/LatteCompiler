@@ -51,3 +51,11 @@ Dla Ifów - jeżeli warunek da rade się uprościć -> usuwam nieużywany kod.
 W pozostałych przypadkach:
 
 Zakładam że plik wejściowy ma roszerzenie `.lat`, inaczej kompilator rzuca błąd.
+
+Operacja `%` jest operacją modulus, a nie remainder, tzn. `5 % (-2) == -1` a `-5 % 2 == 1`.
+
+Pętle i ify, w których jedyną operacją w bloku jest deklaracja, są dozwolone, gdyż nie widzę powodu aby było inaczej. 
+Taka deklaracja traktowana jest wówczas jako deklaracja wewnątrz bloku, a więc taka zmienna nie będzie widoczna nigdzie.
+Wyjątkiem w tym wypadku jest `if(true) int a;` gdyż zostanie to uproszczone do `int a;` i wówczas `a` będzie widoczne 
+poza ifem/pętlą.
+

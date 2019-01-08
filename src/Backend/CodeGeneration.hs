@@ -192,7 +192,7 @@ emitStmt (While _ cond body) = do
       (loopBodyStatus, _, loopBodyInstrs) <- emitStmt body
       jmpInstr <- return $ ["br label %" ++ loopBodyLabel]
       loopBodyInstrs' <- appendJmpIfNotTerminated loopBodyStatus loopBodyInstrs jmpInstr
-      instrs <- return $ [loopBodyLabel ++ ":"] ++ loopBodyInstrs'
+      instrs <- return $ jmpInstr ++ [loopBodyLabel ++ ":"] ++ loopBodyInstrs'
       return (Terminated, env, instrs)
     Nothing -> do
       loopBodyLabel <- updateCurrentLabel ".loop.body"
@@ -227,13 +227,12 @@ emitExpr (EString _ str) = do
   reg <- getNextRegister
   state <- get
   strReg <- return $ "@.str." ++ (fnName state) ++ "." ++ (tail reg)
-  -- todo dlaczego stringi maja zawsze wokolo '"' (np. str == "xx")?
-  globalVarDef <- return $  strReg ++ " = internal constant ["
-                            ++ (show $ (length str) - 1) ++ " x i8] c\"" ++ (tail $ init str) ++ "\\00\""
+  globalVarDef <- return $  strReg ++ " = internal constant [" ++ (show $ (countCharsInString str) - 1) ++ " x i8] " ++
+                            "c\"" ++ (showStringLLVM str) ++ "\\00\""
   put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state)
                   (globalVarDef : (globalVarsDefs state)) (varsStore state) (currentLabel state)
-  instr <- return $ reg ++ " = getelementptr [" ++ (show $ (length str) - 1) ++ " x i8], " ++
-                    "[" ++ (show $ (length str) - 1) ++ " x i8]* " ++ strReg ++ ", i32 0, i32 0"
+  instr <- return $ reg ++ " = getelementptr [" ++ (show $ (countCharsInString str) - 1) ++ " x i8], " ++
+                    "[" ++ (show $ (countCharsInString str) - 1) ++ " x i8]* " ++ strReg ++ ", i32 0, i32 0"
   return ([instr], Str (Just (0, 0)), reg)
 emitExpr (EApp _ (Ident fname) exprs) = do
   state <- get
@@ -245,7 +244,7 @@ emitExpr (EApp _ (Ident fname) exprs) = do
     True -> do
       fnCallInstr <- return [[fnCall]]
       instrs' <- return $ instrs ++ fnCallInstr
-      return (foldr (++) [] instrs', rtype, "%(-1)")
+      return (foldr (++) [] instrs', rtype, "")
     False -> do
       register <- getNextRegister
       fnCallInstr <- return $ [[register ++ " = " ++ fnCall]]
@@ -503,10 +502,27 @@ getCurrentLabel = do
 
 getDefaultValExpr :: TType -> TExpr
 getDefaultValExpr (Int _) = ELitInt (Just (0, 0)) 0
-getDefaultValExpr (Str _) = EString (Just (0, 0)) "\"\""
+getDefaultValExpr (Str _) = EString (Just (0, 0)) "\"\"" -- quotes around empty string to match parser format
 getDefaultValExpr (Bool _) = ELitFalse (Just (0, 0))
 
 simplifyConstExpr :: TExpr -> Maybe Bool
 simplifyConstExpr (ELitTrue _) = Just True
 simplifyConstExpr (ELitFalse _) = Just False
 simplifyConstExpr _ = Nothing
+
+countCharsInString :: String -> Integer
+countCharsInString str = countCharsInString' str 0 where
+  countCharsInString' "" acc = acc
+  countCharsInString' ('\\':'\\':chars) acc = countCharsInString' chars (acc + 1)
+  countCharsInString' ('\\':_:chars) acc = countCharsInString' chars (acc + 1)
+  countCharsInString' (_:chars) acc = countCharsInString' chars (acc + 1)
+
+showStringLLVM :: String -> String
+showStringLLVM str = replaceEscaped (tail $ init $ str) [] where -- tail $ init gets rid of quotes around str
+  replaceEscaped "" acc = intercalate "" $ reverse acc
+  replaceEscaped ('\\':'t':chars) acc = replaceEscaped chars ("\\09":acc)
+  replaceEscaped ('\\':'n':chars) acc = replaceEscaped chars ("\\0A":acc)
+  replaceEscaped ('\\':'\\':chars) acc = replaceEscaped chars ("\\5C":acc)
+  replaceEscaped ('\\':'\"':chars) acc = replaceEscaped chars ("\\22":acc)
+  replaceEscaped ('\\':'\'':chars) acc = replaceEscaped chars ("\\27":acc)
+  replaceEscaped (c:chars) acc = replaceEscaped chars ([c]:acc)
