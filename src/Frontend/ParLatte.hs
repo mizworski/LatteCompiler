@@ -972,7 +972,7 @@ happyError ts ets =
   Bad $ ":" ++ tokenPos ts ++
   case ts of
     [] -> ": expected declaration or statement at end of input"
-    [Err _] -> " due to lexer error"
+    [Err _] -> " due to unknown lexer error"
     (PT _ (TS "/" _)):(PT _ (TS "*" _)):_ -> ": unterminated comment"
     t:_ -> ": expected " ++ getExpectedTokensStr ets ++ " before '" ++ id(prToken t) ++ "' token"
 
