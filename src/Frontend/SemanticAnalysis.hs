@@ -104,7 +104,10 @@ checkStatement (Ret _ expr) retType = do
   env <- ask
   actualType <- checkType expr
   case (actualType == retType) of
-    True -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = Ended}
+    True -> do
+      case actualType of
+        (Void pos) -> throwError $ tokenPos pos ++ " can't return expression value from void function"
+        otherwise -> return Env {vars = vars env, usedNames = usedNames env, computationStatus = Ended}
     otherwise -> do
       case actualType of
         (Int pos) -> throwError $ tokenPos pos ++ " couldn't match actual type 'Int' with expected '"
