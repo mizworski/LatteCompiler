@@ -30,9 +30,11 @@ emitPredefinedFnDecls =
 emitFunction :: TTopDef -> Result String
 emitFunction (FnDef _ rtype (Ident fname) args body) = do
   state <- get
-  put $ StateLLVM 0 0 0 fname (globalVarsDefs state) (varsStore state) ""
+  put $ StateLLVM 0 0 0 fname (globalVarsDefs state) [] (varsStore state) ""
   (env, header) <- emitHeader rtype fname args
   (status, _, bodyInstrs) <- local (const env) $ emitBlock body
+  state <- get
+  localDecls <- return ["    " ++ instr | instr <- (localVarsDefs state)]
   case status of
     Running -> do
       bodyInstrs <- return $ bodyInstrs ++ ["ret void"]
@@ -42,7 +44,7 @@ emitFunction (FnDef _ rtype (Ident fname) args body) = do
     otherwise -> do
       body <- return $ [if "." `isPrefixOf` instr then instr else "    " ++ instr | instr <- bodyInstrs]
       footer <- return ["}"]
-      return $ unlines $ header ++ body ++ footer
+      return $ unlines $ header ++ localDecls ++ body ++ footer
 
 emitHeader :: TType -> String -> [TArg] -> Result (Env, Instructions)
 emitHeader rtype fname args = do
@@ -88,10 +90,14 @@ emitStmt (Decl pos vtype ((NoInit pos2 vident):vitems)) = do
 emitStmt (Decl pos vtype ((Init _ vident expr):vitems)) = do
   (initInstrs, _, resReg) <- emitExpr expr
   (env', varReg) <- declareVarInternally vident vtype
-  declVarInstrs <- return [varReg ++ " = alloca " ++ (showType vtype)]
+  state <- get
+  declVarInstrs <- return $ varReg ++ " = alloca " ++ (showType vtype)
   assignInstr <- return ["store " ++ (showType vtype) ++ " " ++ resReg ++ ", " ++ (showType vtype) ++ "* " ++ varReg]
+  put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state)
+                  (declVarInstrs : (localVarsDefs state)) (varsStore state) (currentLabel state)
+
   (_, env'', declVarsInstrs) <- local (const env') $ emitStmt (Decl pos vtype vitems)
-  return (Running, env'', declVarInstrs ++ initInstrs ++ assignInstr ++ declVarsInstrs)
+  return (Running, env'', initInstrs ++ assignInstr ++ declVarsInstrs)
 emitStmt (Ass _ vident expr) = do
   env <- ask
   (instrs, _, resReg) <- emitExpr expr
@@ -231,7 +237,7 @@ emitExpr (EString _ str) = do
   globalVarDef <- return $  strReg ++ " = internal constant [" ++ (show $ (countCharsInString str) - 1) ++ " x i8] " ++
                             "c\"" ++ (showStringLLVM str) ++ "\\00\""
   put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state)
-                  (globalVarDef : (globalVarsDefs state)) (varsStore state) (currentLabel state)
+                  (globalVarDef : (globalVarsDefs state)) (localVarsDefs state) (varsStore state) (currentLabel state)
   instr <- return $ reg ++ " = getelementptr [" ++ (show $ (countCharsInString str) - 1) ++ " x i8], " ++
                     "[" ++ (show $ (countCharsInString str) - 1) ++ " x i8]* " ++ strReg ++ ", i32 0, i32 0"
   return ([instr], Str (Just (0, 0)), reg)
@@ -391,7 +397,7 @@ getNextRegister = do
   state <- get
   newReg <- return $ nextRegister state
   put $ StateLLVM (newReg + 1) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state)
-                  (varsStore state) (currentLabel state)
+                  (localVarsDefs state) (varsStore state) (currentLabel state)
   return $ "%" ++ (show newReg)
 
 getCurrentBlockNum :: Result Integer
@@ -403,7 +409,7 @@ incrementBlockNum :: Result ()
 incrementBlockNum = do
   state <- get
   put $ StateLLVM (nextRegister state) (nextLabel state) ((nextBlock state) + 1) (fnName state) (globalVarsDefs state)
-                  (varsStore state) (currentLabel state)
+                  (localVarsDefs state) (varsStore state) (currentLabel state)
 
 putFnTypes :: [TTopDef] -> Result Env
 putFnTypes [] = do
@@ -427,7 +433,7 @@ putFn fname fnRtype = do
   state <- get
   newstore <- return $ Data.Map.insert loc (fnRtype, "@" ++ (fnName state)) (varsStore state)
   put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state)
-                  newstore (currentLabel state)
+                  (localVarsDefs state) newstore (currentLabel state)
   return env'
 
 newloc :: Result Loc
@@ -467,7 +473,7 @@ declareVarInternally (Ident vname) vtype = do
     varReg <- return $ "%" ++ vname ++ "." ++ (show blockNum)
     newstore <- return $ Data.Map.insert loc (vtype, varReg) (varsStore state)
     put $ StateLLVM (nextRegister state) (nextLabel state) (nextBlock state) (fnName state) (globalVarsDefs state)
-                    newstore (currentLabel state)
+                    (localVarsDefs state) newstore (currentLabel state)
     return (env', varReg)
 
 getVar :: Ident -> Result (TType, String)
@@ -489,7 +495,7 @@ updateCurrentLabel labelName = do
   nextLabelNum <- return $ nextLabel state
   label <- return $ labelName ++ "."++ (show nextLabelNum)
   put $ StateLLVM (nextRegister state) (nextLabelNum + 1) (nextBlock state) (fnName state) (globalVarsDefs state)
-                  (varsStore state) label
+                  (localVarsDefs state) (varsStore state) label
   return label
 
 appendJmpIfNotTerminated :: TStatus -> Instructions -> Instructions -> Result Instructions

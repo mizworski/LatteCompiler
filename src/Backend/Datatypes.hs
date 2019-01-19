@@ -18,11 +18,12 @@ data StateLLVM = StateLLVM {
   nextBlock :: Integer,
   fnName :: String,
   globalVarsDefs :: [String],
+  localVarsDefs :: [String],
   varsStore :: Data.Map.Map Loc (TType, Register),
   currentLabel :: String
 } deriving (Show)
 
-initialState = StateLLVM 0 0 0 "" [] Data.Map.empty ""
+initialState = StateLLVM 0 0 0 "" [] [] Data.Map.empty ""
 
 type Result a = StateT StateLLVM (ReaderT Env (ExceptT String IO)) a
 data TStatus = Running | Terminated | MaybeTerminated
