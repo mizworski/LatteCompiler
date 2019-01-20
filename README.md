@@ -59,3 +59,22 @@ Taka deklaracja traktowana jest wówczas jako deklaracja wewnątrz bloku, a wię
 Wyjątkiem w tym wypadku jest `if(true) int a;` gdyż zostanie to uproszczone do `int a;` i wówczas `a` będzie widoczne 
 poza ifem/pętlą.
 
+## Zmiany od czasu sprawdzania 18/01/2019
+
+Naprawiony błąd z alokacją w pętli: w tym momencie wszystkie zmienne, które mogą zostać wykorzystane podczas działania
+funkcji są deklarowane na jej początku (w bloku entry). W tym wypadku niektóre zmienne mogą w ogóle zostać niewykorzystane, 
+gdyż będą zadeklarowane w bloku, który ostatecznie nie zostanie osiągnięty, jednak jest to lepsza sytuacja, niż poprzednio.
+
+commit ze zmianami: https://github.com/mizworski/LatteCompiler/commit/240128716db5e9cf8d8e8188b50da5675ed305c7
+
+Optymalizacja constexprów podczas analizy semantycznej - wszystkie wartości, które mogą być obliczone podczas kompilacji, 
+są obliczane. Wynikiem analizy semantycznej jest zmodyfikowane drzewo programu, które to zostaje później przekazane do 
+backendu (a więc optymalizacje są zapamiętywane i nie są liczone dwukrotnie).
+
+commit ze zmianami: https://github.com/mizworski/LatteCompiler/commit/550f54a2fd5c8152eda202c1b31c1cea9f8b5b77
+
+W związku z powyższym usinięte zostało upraszczanie cond-stmt w backendzie, gdyż jest ono robione na poziomie frontendu. 
+Jedyną optymalizacją "powtarzaną" w frontendzie i backendzie jest usuwanie kodu nieosiągalnego (po returnach). Nie jest 
+ono jednak bardzo kosztowne, więc pominąłem to.
+
+commit ze zmianami: https://github.com/mizworski/LatteCompiler/commit/5aac254ff8e138b444d47a391a9f6611bb4b4290
