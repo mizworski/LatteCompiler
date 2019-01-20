@@ -34,7 +34,7 @@ emitFunction (FnDef _ rtype (Ident fname) args body) = do
   (env, header) <- emitHeader rtype fname args
   (status, _, bodyInstrs) <- local (const env) $ emitBlock body
   state <- get
-  localDecls <- return ["    " ++ instr | instr <- (localVarsDefs state)]
+  localDecls <- return ["    " ++ instr | instr <- reverse (localVarsDefs state)]
   case status of
     Running -> do
       bodyInstrs <- return $ bodyInstrs ++ ["ret void"]
@@ -124,84 +124,70 @@ emitStmt (VRet _) = do
   return (Terminated, env, ["ret void"])
 emitStmt (Cond _ cond ifTrueStmt) = do
   env <- ask
-  case (simplifyConstExpr cond) of
-    (Just False) -> return (Running, env, [])
-    (Just True) -> do
-      (status, _, instrs) <- emitStmt ifTrueStmt
-      return (status, env, instrs)
-    Nothing -> do
-      condLabel <- updateCurrentLabel ".if.cond"
-      (condInstrs, _, condReg) <- emitExpr cond
+  condLabel <- updateCurrentLabel ".if.cond"
+  (condInstrs, _, condReg) <- emitExpr cond
 
-      ifTrueLabel <- updateCurrentLabel ".if.true"
-      (ifTrueStatus, _, ifTrueInstrs) <- emitStmt ifTrueStmt
+  ifTrueLabel <- updateCurrentLabel ".if.true"
+  (ifTrueStatus, _, ifTrueInstrs) <- emitStmt ifTrueStmt
 
-      afterCondLabel <- updateCurrentLabel ".after.cond"
+  afterCondLabel <- updateCurrentLabel ".after.cond"
 
-      jmpAfterStmt <- return $ ["br label %" ++ afterCondLabel]
-      jmpInstr <- return ["br i1 " ++ condReg ++ ", label %" ++ ifTrueLabel ++
-                          ", label %" ++ afterCondLabel]
-      jmpToCond <- return ["br label %" ++ condLabel]
-      ifTrueInstrs' <- appendJmpIfNotTerminated ifTrueStatus ifTrueInstrs jmpAfterStmt
+  jmpAfterStmt <- return $ ["br label %" ++ afterCondLabel]
+  jmpInstr <- return ["br i1 " ++ condReg ++ ", label %" ++ ifTrueLabel ++
+                      ", label %" ++ afterCondLabel]
+  jmpToCond <- return ["br label %" ++ condLabel]
+  ifTrueInstrs' <- appendJmpIfNotTerminated ifTrueStatus ifTrueInstrs jmpAfterStmt
 
-      instrs <- return $ jmpToCond ++ [condLabel ++ ":"] ++ condInstrs ++
-                         jmpInstr ++ [ifTrueLabel ++ ":"] ++ ifTrueInstrs' ++ [afterCondLabel ++ ":"]
-      if (ifTrueStatus == Running) then return (Running, env, instrs) else return (MaybeTerminated, env, instrs)
+  instrs <- return $ jmpToCond ++ [condLabel ++ ":"] ++ condInstrs ++
+                     jmpInstr ++ [ifTrueLabel ++ ":"] ++ ifTrueInstrs' ++ [afterCondLabel ++ ":"]
+  if (ifTrueStatus == Running) then return (Running, env, instrs) else return (MaybeTerminated, env, instrs)
 emitStmt (CondElse _ cond ifTrueStmt ifFalseStmt) = do
   env <- ask
-  case (simplifyConstExpr cond) of
-    (Just False) -> do
-      (status, _, instrs) <- emitStmt ifFalseStmt
-      return (status, env, instrs)
-    (Just True) -> do
-      (status, _, instrs) <- emitStmt ifTrueStmt
-      return (status, env, instrs)
-    Nothing -> do
-      condLabel <- updateCurrentLabel ".if.cond"
-      (condInstrs, _, condReg) <- emitExpr cond
+  condLabel <- updateCurrentLabel ".if.cond"
+  (condInstrs, _, condReg) <- emitExpr cond
 
-      ifTrueLabel <- updateCurrentLabel ".if.true"
-      (ifTrueStatus, _, ifTrueInstrs) <- emitStmt ifTrueStmt
+  ifTrueLabel <- updateCurrentLabel ".if.true"
+  (ifTrueStatus, _, ifTrueInstrs) <- emitStmt ifTrueStmt
 
-      ifFalseLabel <- updateCurrentLabel ".if.false"
-      (ifFalseStatus, _, ifFalseInstrs) <- emitStmt ifFalseStmt
+  ifFalseLabel <- updateCurrentLabel ".if.false"
+  (ifFalseStatus, _, ifFalseInstrs) <- emitStmt ifFalseStmt
 
-      afterCondLabel <- updateCurrentLabel ".after.cond"
+  afterCondLabel <- updateCurrentLabel ".after.cond"
 
-      jmpToCond <- return ["br label %" ++ condLabel]
-      jmpAfterStmt <- return $ ["br label %" ++ afterCondLabel]
+  jmpToCond <- return ["br label %" ++ condLabel]
+  jmpAfterStmt <- return $ ["br label %" ++ afterCondLabel]
 
-      ifTrueInstrs' <- appendJmpIfNotTerminated ifTrueStatus ifTrueInstrs jmpAfterStmt
-      ifFalseInstrs' <- appendJmpIfNotTerminated ifFalseStatus ifFalseInstrs jmpAfterStmt
+  ifTrueInstrs' <- appendJmpIfNotTerminated ifTrueStatus ifTrueInstrs jmpAfterStmt
+  ifFalseInstrs' <- appendJmpIfNotTerminated ifFalseStatus ifFalseInstrs jmpAfterStmt
 
-      jmpInstr <- return ["br i1 " ++ condReg ++ ", label %" ++ ifTrueLabel ++
-                          ", label %" ++ ifFalseLabel]
+  jmpInstr <- return ["br i1 " ++ condReg ++ ", label %" ++ ifTrueLabel ++
+                      ", label %" ++ ifFalseLabel]
 
-      if (ifTrueStatus == Terminated && ifFalseStatus == Terminated) then do
-        instrs <- return $ jmpToCond ++ [condLabel ++ ":"] ++ condInstrs ++ jmpInstr ++
-                           [ifTrueLabel ++ ":"] ++ ifTrueInstrs' ++
-                           [ifFalseLabel ++ ":"] ++ ifFalseInstrs
-        return (Terminated, env, instrs)
-      else do
-        instrs <- return $ jmpToCond ++ [condLabel ++ ":"] ++ condInstrs ++ jmpInstr ++
-                           [ifTrueLabel ++ ":"] ++ ifTrueInstrs' ++
-                           [ifFalseLabel ++ ":"] ++ ifFalseInstrs' ++ [afterCondLabel ++ ":"]
-        if (ifTrueStatus == Running && ifFalseStatus == Running) then
-          return (Running, env, instrs)
-        else
-          return (MaybeTerminated, env, instrs)
+  if (ifTrueStatus == Terminated && ifFalseStatus == Terminated) then do
+    instrs <- return $ jmpToCond ++ [condLabel ++ ":"] ++ condInstrs ++ jmpInstr ++
+                       [ifTrueLabel ++ ":"] ++ ifTrueInstrs' ++
+                       [ifFalseLabel ++ ":"] ++ ifFalseInstrs
+    return (Terminated, env, instrs)
+  else do
+    instrs <- return $ jmpToCond ++ [condLabel ++ ":"] ++ condInstrs ++ jmpInstr ++
+                       [ifTrueLabel ++ ":"] ++ ifTrueInstrs' ++
+                       [ifFalseLabel ++ ":"] ++ ifFalseInstrs' ++ [afterCondLabel ++ ":"]
+    if (ifTrueStatus == Running && ifFalseStatus == Running) then
+      return (Running, env, instrs)
+    else
+      return (MaybeTerminated, env, instrs)
 emitStmt (While _ cond body) = do
   env <- ask
-  case (simplifyConstExpr cond) of
-    (Just False) -> return (Running, env, [])
-    (Just True) -> do
+  case cond of
+    (ELitFalse _) -> return (Running, env, [])
+    (ELitTrue _) -> do
       loopBodyLabel <- updateCurrentLabel ".loop.body"
       (loopBodyStatus, _, loopBodyInstrs) <- emitStmt body
       jmpInstr <- return $ ["br label %" ++ loopBodyLabel]
       loopBodyInstrs' <- appendJmpIfNotTerminated loopBodyStatus loopBodyInstrs jmpInstr
       instrs <- return $ jmpInstr ++ [loopBodyLabel ++ ":"] ++ loopBodyInstrs'
       return (Terminated, env, instrs)
-    Nothing -> do
+    otherwise -> do
       loopBodyLabel <- updateCurrentLabel ".loop.body"
       (loopBodyStatus, _, loopBodyInstrs) <- emitStmt body
 
@@ -511,11 +497,6 @@ getDefaultValExpr :: TType -> TExpr
 getDefaultValExpr (Int _) = ELitInt (Just (0, 0)) 0
 getDefaultValExpr (Str _) = EString (Just (0, 0)) "\"\"" -- quotes around empty string to match parser format
 getDefaultValExpr (Bool _) = ELitFalse (Just (0, 0))
-
-simplifyConstExpr :: TExpr -> Maybe Bool
-simplifyConstExpr (ELitTrue _) = Just True
-simplifyConstExpr (ELitFalse _) = Just False
-simplifyConstExpr _ = Nothing
 
 countCharsInString :: String -> Integer
 countCharsInString str = countCharsInString' str 0 where
