@@ -17,6 +17,7 @@ type TStmt = Stmt SPos
 type TExpr = Expr SPos
 type TProgram = Program SPos
 type TTopDef = TopDef SPos
+type TRelOp = RelOp SPos
 
 data ComputationStatus = Running | MaybeEnded | Ended
 type Loc = Int

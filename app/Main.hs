@@ -30,10 +30,9 @@ compileToLLVM inputFilename outputFilename = do
           hPutStrLn stderr "ERROR"
           hPutStrLn stderr $ inputFilename ++ errMsg
           exitWith (ExitFailure 42)
-        otherwise -> do
+        (Right optIR) -> do
           hPutStrLn stderr "OK"
---           ir <- middleEnd ir
-          maybeRes <- runExceptT $ runReaderT (runStateT (emitProgram ir) initialState) Data.Map.empty
+          maybeRes <- runExceptT $ runReaderT (runStateT (emitProgram optIR) initialState) Data.Map.empty
           case maybeRes of
             (Left errMsg) -> do
               hPutStrLn stderr "COMPILER INTERNAL ERROR"
